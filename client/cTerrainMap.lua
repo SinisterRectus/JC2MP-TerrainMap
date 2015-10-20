@@ -207,10 +207,6 @@ function TerrainMap:GetCell(position)
 
 end
 
-function TerrainMap:IsLoaded(cell_x, cell_y)
-	return self.graph[cell_x] and self.graph[cell_x][cell_y]
-end
-
 function TerrainMap:MapTerrain(step)
 
 	local timer = Timer()
@@ -465,7 +461,6 @@ function TerrainMap:Process(cell_x, cell_y)
 			end
 							
 		end
-		collectgarbage()
 	end
 	
 	print(string.format("Map time: %i ms", timer:GetMilliseconds()))
