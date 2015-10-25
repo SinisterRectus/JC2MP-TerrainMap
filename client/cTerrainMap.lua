@@ -210,6 +210,8 @@ end
 function TerrainMap:MapTerrain(step)
 
 	local timer = Timer()
+	local insert = table.insert
+	local colors = {}
 
 	self.models = {}
 	
@@ -218,12 +220,13 @@ function TerrainMap:MapTerrain(step)
 		local vertices = {}
 		for z = -16384, 16384, step or 256 do
 			local y = Physics:GetTerrainHeight(Vector2(x, z))
-			table.insert(vertices, Vertex(Vector3(x, y, z), self:GetColor(y)))
+			colors[y] = colors[y] or self:GetColor(y)
+			insert(vertices, Vertex(Vector3(x, y, z), colors[y]))
 		end
 
 		local model = Model.Create(vertices)
 		model:SetTopology(Topology.LineStrip)
-		table.insert(self.models, model)
+		insert(self.models, model)
 
 	end
 	
@@ -232,16 +235,17 @@ function TerrainMap:MapTerrain(step)
 		local vertices = {}
 		for x = -16384, 16384, step or 256 do
 			local y = Physics:GetTerrainHeight(Vector2(x, z))
-			table.insert(vertices, Vertex(Vector3(x, y, z), self:GetColor(y)))
+			colors[y] = colors[y] or self:GetColor(y)
+			insert(vertices, Vertex(Vector3(x, y, z), colors[y]))
 		end
 
 		local model = Model.Create(vertices)
 		model:SetTopology(Topology.LineStrip)
-		table.insert(self.models, model)
+		insert(self.models, model)
 
 	end
 	
-	print("Terrain time: "..tostring(timer:GetMilliseconds()).." ms")
+	print(string.format("Terrain time: %i ms", timer:GetMilliseconds()))
 
 end
 
@@ -253,7 +257,7 @@ function TerrainMap:GetColor(y)
 	else
 		color = Color.FromHSV(math.lerp(120, 0, (y - 200) / 1900), 1, 1)
 	end
-	color.a = 128
+	color.a = 192
 	
 	return color
 
@@ -345,10 +349,7 @@ function TerrainMap:AddNode(x, y, z)
 	self.graph[cell_x][cell_y] = self.graph[cell_x][cell_y] or {}
 	self.graph[cell_x][cell_y][x] = self.graph[cell_x][cell_y][x] or {}
 	self.graph[cell_x][cell_y][x][z] = self.graph[cell_x][cell_y][x][z] or {}
-	
-	if not self.graph[cell_x][cell_y][x][z][y] then
-		self.graph[cell_x][cell_y][x][z][y] = {Vector3(x, y, z)}
-	end
+	self.graph[cell_x][cell_y][x][z][y] = {Vector3(x, y, z)}
 
 end
 
@@ -357,19 +358,18 @@ function TerrainMap:LineOfSight(start_node, end_node)
 	if math.abs(self:GetSlope(start_node, end_node)) > self.max_slope then return false end
 
 	local distance = Vector3.Distance(start_node[1], end_node[1])
-	local ray1 = Physics:Raycast(start_node[1] + Vector3.Up * self.path_height, (end_node[1] - start_node[1]), 0, distance)
-	local ray2 = Physics:Raycast(end_node[1] + Vector3.Up * self.path_height, (start_node[1] - end_node[1]), 0, distance)
 	
-	return not (ray1.distance < distance or ray2.distance < distance)
+	if Physics:Raycast(start_node[1] + Vector3.Up * self.path_height, end_node[1] - start_node[1], 0, distance).distance < distance then return false end
+	
+	if Physics:Raycast(end_node[1] + Vector3.Up * self.path_height, start_node[1] - end_node[1], 0, distance).distance < distance then return false end
+	
+	return true
 	
 end
 
 function TerrainMap:GetSlope(start_node, end_node)
-
-	local rise = end_node[1].y - start_node[1].y
-	local run = Vector3.Distance2D(start_node[1], end_node[1])
 	
-	return rise / run
+	return (end_node[1].y - start_node[1].y) / Vector3.Distance2D(start_node[1], end_node[1])
 
 end
 
@@ -407,8 +407,7 @@ function TerrainMap:Process(cell_x, cell_y)
 				end
 				
 				if r_cell and r_cell[x+step] and r_cell[x+step][z] and not start_node[5] then
-					for n, right in pairs(r_cell[x+step][z]) do
-						local end_node = right
+					for n, end_node in pairs(r_cell[x+step][z]) do
 						if y == self.sea_level and n == self.sea_level then
 							start_node[5] = end_node
 							end_node[4] = start_node
@@ -420,8 +419,7 @@ function TerrainMap:Process(cell_x, cell_y)
 				end
 
 				if l_cell and l_cell[x-step] and l_cell[x-step][z] and not start_node[4] then
-					for n, left in pairs(l_cell[x-step][z]) do
-						local end_node = left
+					for n, end_node in pairs(l_cell[x-step][z]) do
 						if y == self.sea_level and n == self.sea_level then
 							start_node[4] = end_node
 							end_node[5] = start_node
@@ -433,8 +431,7 @@ function TerrainMap:Process(cell_x, cell_y)
 				end
 
 				if b_cell and b_cell[x][z+step] and not start_node[3] then
-					for n, backward in pairs(b_cell[x][z+step]) do
-						local end_node = backward
+					for n, end_node in pairs(b_cell[x][z+step]) do
 						if y == self.sea_level and n == self.sea_level then
 							start_node[3] = end_node
 							end_node[2] = start_node
@@ -446,8 +443,7 @@ function TerrainMap:Process(cell_x, cell_y)
 				end
 				
 				if f_cell and f_cell[x][z-step] and not start_node[2] then
-					for n, forward in pairs(f_cell[x][z-step]) do
-						local end_node = forward
+					for n, end_node in pairs(f_cell[x][z-step]) do
 						if y == self.sea_level and n == self.sea_level then
 							start_node[2] = end_node
 							end_node[3] = start_node
@@ -510,7 +506,7 @@ function TerrainMap:GetNearestNodeBruteForce(position)
 	
 	local cell_x, cell_y = self:GetCell(position)
 	
-	if self.graph[cell_x] then
+	if self.graph[cell_x] and self.graph[cell_x][cell_y] then
 		for x, v in pairs(self.graph[cell_x][cell_y]) do
 			for z, v in pairs(v) do
 				for y, node in pairs(v) do
@@ -535,19 +531,16 @@ function TerrainMap:RemoveDisconnected()
 	local timer = Timer()
 
 	local start = self:GetNearestNode(LocalPlayer:GetPosition())
-	local visited = {}
 	local connected = {[start] = true}
 	local s = {start}
 	
 	while #s > 0 do
-
 		for _, neighbor in ipairs(self:GetNeighbors(table.remove(s))) do			
 			if not connected[neighbor] then
 				table.insert(s, neighbor)
 				connected[neighbor] = true
 			end
-		end
-		
+		end	
 	end
 	
 	for cell_x, v in pairs(self.graph) do
@@ -627,7 +620,7 @@ function TerrainMap:FindPath(start, goal)
 	local priority = {}
 	
 	cost_so_far[start] = 0
-	priority[start] = cost_so_far[start] + self:GetHeuristicCost(start, goal)
+	priority[start] = self:GetHeuristicCost(start, goal)
 	frontier[start] = true
 	
 	while next(frontier) do
@@ -647,14 +640,14 @@ function TerrainMap:FindPath(start, goal)
 		
 		if current == goal then
 		
-			print(string.format("A* time: %i ms", timer:GetMilliseconds()))
-
 			local path = {current}
 			
 			while came_from[current] do
 				current = came_from[current]
 				table.insert(path, current)
 			end
+			
+			print(string.format("A* time: %i ms", timer:GetMilliseconds()))
 			
 			return path, visited
 			
