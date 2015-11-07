@@ -57,7 +57,8 @@ function TerrainMap:LocalPlayerChat(args)
 	end
 	
 	if cmd == "/getcell" then
-		Chat:Print(string.format("Cell = (%i, %i)", self:GetCell(LocalPlayer:GetPosition())), Color.Silver)
+		local pos = LocalPlayer:GetPosition()
+		Chat:Print(string.format("Cell = (%i, %i)", self:GetCell(pos.x, pos.z)), Color.Silver)
 		return false
 	end	
 	
@@ -67,14 +68,16 @@ function TerrainMap:LocalPlayerChat(args)
 	end
 	
 	if cmd == "/mapcell" then
-		self:BuildMap(self:GetCell(LocalPlayer:GetPosition()))
+		local pos = LocalPlayer:GetPosition()
+		self:BuildMap(self:GetCell(pos.x, pos.z))
 		self.render = true
 		self.show_points = true
 		return false
 	end
 	
 	if cmd == "/processcell" then
-		local cell_x, cell_y = self:GetCell(LocalPlayer:GetPosition())
+		local pos = LocalPlayer:GetPosition()
+		local cell_x, cell_y = self:GetCell(pos.x, pos.z)
 		if self.graph[cell_x] and self.graph[cell_x][cell_y] then
 			self:Process(cell_x, cell_y)
 			self.show_points = false
@@ -84,7 +87,8 @@ function TerrainMap:LocalPlayerChat(args)
 	end
 	
 	if cmd == "/unloadcell" then
-		local cell_x, cell_y = self:GetCell(LocalPlayer:GetPosition())
+		local pos = LocalPlayer:GetPosition()
+		local cell_x, cell_y = self:GetCell(pos.x, pos.z)
 		if self.graph[cell_x] then self.graph[cell_x][cell_y] = nil end
 		if not next(self.graph[cell_x]) then self.graph[cell_x] = nil end
 		return false
@@ -201,9 +205,9 @@ function TerrainMap:TerrainLoad()
 
 end
 
-function TerrainMap:GetCell(position)
+function TerrainMap:GetCell(x, z)
 
-	return math.floor((position.x + 16384) / self.cell_size), math.floor((position.z + 16384) / self.cell_size)
+	return math.floor((x + 16384) / self.cell_size), math.floor((z + 16384) / self.cell_size)
 
 end
 
@@ -317,9 +321,9 @@ end
 
 function TerrainMap:VectorToNode(vector)
 
-	local cell_x, cell_y = self:GetCell(vector)
+	local cell_x, cell_y = self:GetCell(vector.x, vector.z)
 	
-	if self.graph[cell_x] and self.graph[cell_x][cell_y] and self.graph[cell_x][cell_y][vector.x] and self.graph[cell_x][cell_y][vector.x][vector.y] then
+	if self.graph[cell_x] and self.graph[cell_x][cell_y] and self.graph[cell_x][cell_y][vector.x] and self.graph[cell_x][cell_y][vector.x][vector.z] then
 		return self.graph[cell_x][cell_y][vector.x][vector.z][math.round(vector.y, self.y_precision)]
 	else
 		return nil
@@ -329,7 +333,7 @@ end
 
 function TerrainMap:AddNode(x, y, z)
 
-	local cell_x, cell_y = self:GetCell(Vector3(x, y, z))
+	local cell_x, cell_y = self:GetCell(x, z)
 	
 	self.graph[cell_x] = self.graph[cell_x] or {}
 	self.graph[cell_x][cell_y] = self.graph[cell_x][cell_y] or {}
@@ -362,39 +366,38 @@ end
 function TerrainMap:Process(cell_x, cell_y)
 	
 	local timer = Timer()
+	local step = self.xz_step
 
 	for x, v in pairs(self.graph[cell_x][cell_y]) do
 		for z, v in pairs(v) do
 			for y, start_node in pairs(v) do
-				
-				local step = self.xz_step
 
-				local f_cell_x, f_cell_y = self:GetCell(Vector3(x, y, z-step))
-				local b_cell_x, b_cell_y = self:GetCell(Vector3(x, y, z+step))
-				local l_cell_x, l_cell_y = self:GetCell(Vector3(x-step, y, z))
-				local r_cell_x, r_cell_y = self:GetCell(Vector3(x+step, y, z))
+				local f_cell_x, f_cell_y = self:GetCell(x, z-step)
+				local b_cell_x, b_cell_y = self:GetCell(x, z+step)
+				local l_cell_x, l_cell_y = self:GetCell(x-step, z)
+				local r_cell_x, r_cell_y = self:GetCell(x+step, z)
 				
 				local f_cell, b_cell, l_cell, r_cell
 				
-				if self.graph[f_cell_x] and self.graph[f_cell_x][f_cell_y] then
+				if self.graph[f_cell_x] then
 					f_cell = self.graph[f_cell_x][f_cell_y]
 				end
 				
-				if self.graph[b_cell_x] and self.graph[b_cell_x][b_cell_y] then
+				if self.graph[b_cell_x] then
 					b_cell = self.graph[b_cell_x][b_cell_y]
 				end
 				
-				if self.graph[l_cell_x] and self.graph[l_cell_x][l_cell_y] then
+				if self.graph[l_cell_x] then
 					l_cell = self.graph[l_cell_x][l_cell_y]
 				end
 				
-				if self.graph[r_cell_x] and self.graph[r_cell_x][r_cell_y] then
+				if self.graph[r_cell_x] then
 					r_cell = self.graph[r_cell_x][r_cell_y]
 				end
 				
 				if r_cell and r_cell[x+step] and r_cell[x+step][z] and not start_node[5] then
 					for n, end_node in pairs(r_cell[x+step][z]) do
-						if y == self.sea_level and n == self.sea_level then
+						if y == self.sea_level and y == n then
 							start_node[5] = end_node
 							end_node[4] = start_node
 						elseif self:LineOfSight(start_node, end_node) then
@@ -406,7 +409,7 @@ function TerrainMap:Process(cell_x, cell_y)
 
 				if l_cell and l_cell[x-step] and l_cell[x-step][z] and not start_node[4] then
 					for n, end_node in pairs(l_cell[x-step][z]) do
-						if y == self.sea_level and n == self.sea_level then
+						if y == self.sea_level and y == n then
 							start_node[4] = end_node
 							end_node[5] = start_node
 						elseif self:LineOfSight(start_node, end_node) then
@@ -418,7 +421,7 @@ function TerrainMap:Process(cell_x, cell_y)
 
 				if b_cell and b_cell[x][z+step] and not start_node[3] then
 					for n, end_node in pairs(b_cell[x][z+step]) do
-						if y == self.sea_level and n == self.sea_level then
+						if y == self.sea_level and y == n then
 							start_node[3] = end_node
 							end_node[2] = start_node
 						elseif self:LineOfSight(start_node, end_node) then
@@ -430,7 +433,7 @@ function TerrainMap:Process(cell_x, cell_y)
 				
 				if f_cell and f_cell[x][z-step] and not start_node[2] then
 					for n, end_node in pairs(f_cell[x][z-step]) do
-						if y == self.sea_level and n == self.sea_level then
+						if y == self.sea_level and y == n then
 							start_node[2] = end_node
 							end_node[3] = start_node
 						elseif self:LineOfSight(start_node, end_node) then
@@ -454,7 +457,7 @@ function TerrainMap:GetNearestNode(position)
 	local nearest_distance = math.huge
 	local nearest_node = nil
 	
-	local cell_x, cell_y = self:GetCell(position)
+	local cell_x, cell_y = self:GetCell(position.x, position.z)
 	
 	if self.graph[cell_x] and self.graph[cell_x][cell_y] then
 	
@@ -490,7 +493,7 @@ function TerrainMap:GetNearestNodeBruteForce(position)
 	local nearest_distance = math.huge
 	local nearest_node = nil
 	
-	local cell_x, cell_y = self:GetCell(position)
+	local cell_x, cell_y = self:GetCell(position.x, position.z)
 	
 	if self.graph[cell_x] and self.graph[cell_x][cell_y] then
 		for x, v in pairs(self.graph[cell_x][cell_y]) do
@@ -567,7 +570,7 @@ end
 
 function TerrainMap:DeleteNode(node)
 
-	local cell_x, cell_y = self:GetCell(node[1])
+	local cell_x, cell_y = self:GetCell(node[1].x, node[2].z)
 	
 	if node[2] then node[2][3] = nil end
 	if node[3] then node[3][2] = nil end
