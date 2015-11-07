@@ -42,7 +42,7 @@ function TerrainMap:InitGraph()
 	self.show_visited = nil
 	self.start_node = nil
 	self.goal_node = nil
-	self.models = nil
+	self.model = nil
 
 end
 
@@ -207,59 +207,45 @@ function TerrainMap:GetCell(position)
 
 end
 
-function TerrainMap:MapTerrain(step)
+function TerrainMap:MapTerrain(h)
 
 	local timer = Timer()
-	local insert = table.insert
+	
 	local colors = {}
-
-	self.models = {}
-	
-	for x = -16384, 16384, step or 256 do
-		
-		local vertices = {}
-		for z = -16384, 16384, step or 256 do
-			local y = Physics:GetTerrainHeight(Vector2(x, z))
-			colors[y] = colors[y] or self:GetColor(y)
-			insert(vertices, Vertex(Vector3(x, y, z), colors[y]))
+	local function GetColor(y, alpha)
+		if not colors[y] then
+			local color
+			if y <= 200 then
+				color = Color.FromHSV(math.lerp(240, 190, y / 200), 1, 1)
+			else
+				color = Color.FromHSV(math.lerp(120, 0, (y - 200) / 1900), 1, 1)
+			end
+			if alpha then color.a = alpha end
+			colors[y] = color
 		end
-
-		local model = Model.Create(vertices)
-		model:SetTopology(Topology.LineStrip)
-		insert(self.models, model)
-
+		return colors[y]	
 	end
 	
-	for z = -16384, 16384, step or 256 do
-		
-		local vertices = {}
-		for x = -16384, 16384, step or 256 do
-			local y = Physics:GetTerrainHeight(Vector2(x, z))
-			colors[y] = colors[y] or self:GetColor(y)
-			insert(vertices, Vertex(Vector3(x, y, z), colors[y]))
-		end
-
-		local model = Model.Create(vertices)
-		model:SetTopology(Topology.LineStrip)
-		insert(self.models, model)
-
+	local vertices = {}
+	local function AddVertex(x, z)
+		local y = Physics:GetTerrainHeight(Vector2(x, z))
+		table.insert(vertices, Vertex(Vector3(x, y, z), GetColor(y, 192)))
 	end
+	
+	local n = 1
+	local h = h or 256	
+	for x = -16384, 16384, h do
+		for z = -16384 * n, 16384 * n, h * n do
+			AddVertex(x, z)
+			AddVertex(x + h, z)
+		end
+		n = -n
+	end
+	
+	self.model = Model.Create(vertices)
+	self.model:SetTopology(Topology.TriangleStrip)
 	
 	print(string.format("Terrain time: %i ms", timer:GetMilliseconds()))
-
-end
-
-function TerrainMap:GetColor(y)
-	
-	local color
-	if y <= 200 then
-		color = Color.FromHSV(math.lerp(240, 190, y / 200), 1, 1)
-	else
-		color = Color.FromHSV(math.lerp(120, 0, (y - 200) / 1900), 1, 1)
-	end
-	color.a = 192
-	
-	return color
 
 end
 
@@ -739,11 +725,7 @@ function TerrainMap:Render()
 
 	if Game:GetState() ~= 4 or not self.render then return end
 
-	if self.models then
-		for _, model in ipairs(self.models) do
-			model:Draw()
-		end
-	end
+	if self.model then self.model:Draw() end
 		
 	if self.show_points or self.show_lines then
 		self:DrawGraph(self.graph, Color.Lime)
