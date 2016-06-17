@@ -1,596 +1,328 @@
+local math, string, table = math, string, table
+local pairs, ipairs, next = pairs, ipairs, next
+local max, min, abs, sqrt = math.max, math.min, math.abs, math.sqrt
+local floor, round = math.floor, math.round
+local format, split = string.format, string.split
+local insert = table.insert
+local band = bit32.band
+local huge = math.huge
+local config = config
+
+local distances = {}
+
+function distances.manhattan(a, b)
+	local dx = abs(b[1].x - a[1].x)
+	local dy = abs(b[1].y - a[1].y)
+	local dz = abs(b[1].z - a[1].z)
+	return dx + dy + dz
+end
+
+local diff = sqrt(2) - 2
+function distances.diagonal(a, b)
+	local dx = abs(b[1].x - a[1].x)
+	local dy = abs(b[1].y - a[1].y)
+	local dz = abs(b[1].z - a[1].z)
+	return dx + dy + dz + diff * min(dx, dy, dz)
+end
+
+function distances.euclidian(a, b)
+	return a[1]:Distance(b[1])
+end
+
+function distances.euclidianSqr(a, b)
+	return a[1]:DistanceSqr(b[1])
+end
+
 class 'TerrainMap'
 
 function TerrainMap:__init()
 
-	self.cell_size = 128 -- Cell edge length (0-127 inclusive)
-	self.xz_step = 2 -- XZ resolution, should be an integer
-	self.y_min_step = 2 -- Y Resolution, 2 seems to be good, don't go too low or too high with this
-	self.y_max_step = 1100 -- Greatest distance from the ground to an object: Mile High Club
-	self.y_precision = 2 -- Number of decimal points to use when storing height data, 2 = cm precision
-	self.ceiling = 2100 -- Maximum height: Gunung Raya, "Top of the World"
-	self.sea_level = 200 -- Sea level height
-	self.max_slope = 1 -- Maximum edge slope, 1 = 45 degrees
-	self.path_height = 0.5 -- Line-of-sight check is at this height above the node
-	self.radius = 0.05 -- Node render radius
-	self.check_ceiling = false -- Whether to use raycasts during DFS to check for ceilings
-	self.map_sea = true -- Whether to map sea nodes at all
-	self.solid_sea = true -- Whether to map sea nodes at sea level or at undersea terrain
-	self.interpolate_eight = true -- Whether to simulate eight-direction movement
-	
-	-- Node data structure
-	-- [1] = center vector
-	-- [2] = forward node
-	-- [3] = backard node
-	-- [4] = left node
-	-- [5] = right node
-
 	self:InitGraph()
-	
-	Events:Subscribe("Render", self, self.Render)
-	Events:Subscribe("LocalPlayerChat", self, self.LocalPlayerChat)
+
+	local directions = {
+		{0x01, 0,-1, 2, 3}, -- forward
+		{0x02, 0, 1, 3, 2}, -- backward
+		{0x04,-1, 0, 4, 5}, -- left
+		{0x08, 1, 0, 5, 4}, -- right
+	}
+
+	if config.eight then
+		insert(directions, {0x10,-1,-1, 6, 7}) -- forward left
+		insert(directions, {0x20, 1, 1, 7, 6}) -- backward right
+		insert(directions, {0x40, 1,-1, 8, 9}) -- forward right
+		insert(directions, {0x80,-1, 1, 9, 8}) -- backward left
+	end
+
+	self.directions = directions
+
+	Events:Subscribe('PlayerChat', self, self.OnPlayerChat)
+	Events:Subscribe('Render', self, self.OnRender)
 
 end
 
 function TerrainMap:InitGraph()
-
 	self.graph = {}
+	self.model = nil
+	self.start = nil
+	self.stop = nil
 	self.path = nil
 	self.visited = nil
-	self.render = nil
-	self.show_points = nil
-	self.show_lines = nil
-	self.show_visited = nil
-	self.start_node = nil
-	self.goal_node = nil
-	self.model = nil
-
+	self.path_offset = Vector3.Up * config.path_height
 end
 
-function TerrainMap:LocalPlayerChat(args)
+function TerrainMap:OnPlayerChat(args)
 
-	local text = args.text:split(" ")
+	local text = split(args.text, ' ')
 	local cmd = text[1]
-	
+
 	if cmd == "/getpos" then
 		Chat:Print(tostring(LocalPlayer:GetPosition()), Color.Silver)
 		return false
 	end
-	
-	if cmd == "/getcell" then
+
+	if cmd == '/getcell' then
 		local pos = LocalPlayer:GetPosition()
-		Chat:Print(string.format("Cell = (%i, %i)", self:GetCell(pos.x, pos.z)), Color.Silver)
-		return false
-	end	
-	
-	if cmd == "/tpcell" then
-		self:TeleportToCell(tonumber(text[2]), tonumber(text[3]))
-		return false
-	end
-	
-	if cmd == "/mapcell" then
-		local pos = LocalPlayer:GetPosition()
-		self:BuildMap(self:GetCell(pos.x, pos.z))
-		self.render = true
-		self.show_points = true
-		return false
-	end
-	
-	if cmd == "/processcell" then
-		local pos = LocalPlayer:GetPosition()
-		local cell_x, cell_y = self:GetCell(pos.x, pos.z)
-		if self.graph[cell_x] and self.graph[cell_x][cell_y] then
-			self:Process(cell_x, cell_y)
-			self.show_points = false
-			self.show_lines = true
-		end
-		return false
-	end
-	
-	if cmd == "/unloadcell" then
-		local pos = LocalPlayer:GetPosition()
-		local cell_x, cell_y = self:GetCell(pos.x, pos.z)
-		if self.graph[cell_x] then self.graph[cell_x][cell_y] = nil end
-		if not next(self.graph[cell_x]) then self.graph[cell_x] = nil end
-		return false
-	end
-	
-	if cmd == "/dfs" then
-		self:RemoveDisconnected()
+		Chat:Print(format('Cell = (%i, %i)', self:GetCellXY(pos.x, pos.z)), Color.Silver)
 		return false
 	end
 
-	if cmd == "/start" then
-		self.start_node = self:GetNearestNode(LocalPlayer:GetPosition())
-		return false
-	end
-	
-	if cmd == "/goal" and self.start_node then
-		self.goal_node = self:GetNearestNode(LocalPlayer:GetPosition())
-		return false
-	end
-	
-	if cmd == "/path" and self.start_node and self.goal_node then
-		self.path, self.visited = self:FindPath(self.start_node, self.goal_node)
-		self.show_lines = false
-		self.show_points = false
-		self.show_visited = true
-		return false
-	end
-	
-	if cmd == "/toggle8" then
-		self.interpolate_eight = not self.interpolate_eight
-		return false
-	end
-	
-	if cmd == "/render" then
-		self.render = not self.render
-		return false
-	end
-	
-	if cmd == "/points" then 
-		self.show_points = not self.show_points
-		return false
-	end
-	
-	if cmd == "/lines" then
-		self.show_lines = not self.show_lines
+	if cmd == '/tpcell' then
+		local cell_x, cell_y = tonumber(text[2]), tonumber(text[3])
+		if cell_x and cell_y then self:TeleportToCell(cell_x, cell_y) end
 		return false
 	end
 
-	if cmd == "/visited" then
-		self.show_visited = not self.show_visited
+	if cmd == '/mapcell' then
+		local pos = LocalPlayer:GetPosition()
+		local timer = Timer()
+		self:MapCell(self:GetCellXY(pos.x, pos.z))
+		printf('Map time: %i ms', timer:GetMilliseconds())
+		timer:Restart()
+		self:BuildPointModel()
+		printf('Point model time: %i ms', timer:GetMilliseconds())
 		return false
 	end
 
-	if cmd == "/deletenode" then
-		self:DeleteNode(self:GetNearestNode(LocalPlayer:GetPosition()))
+	if cmd == '/processcell' then
+		local pos = LocalPlayer:GetPosition()
+		local timer = Timer()
+		self:ProcessCell(self:GetCellXY(pos.x, pos.z))
+		printf('Process time: %i ms', timer:GetMilliseconds())
+		timer:Restart()
+		self:BuildLineModel()
+		printf('Line model time: %i ms', timer:GetMilliseconds())
 		return false
 	end
-	
-	if cmd == "/mapterrain" then
-		self:MapTerrain(tonumber(text[2]))
-		self.render = true
-		return false
-	end
-	
+
 	if cmd == "/mem" then
-		collectgarbage()
-		collectgarbage()
-		Chat:Print(string.format("%i kB used", collectgarbage("count")), Color.Silver)
+		local mem = self:GetMemoryUsage()
+		Chat:Print(format("%i kB used", mem), Color.Silver)
 		return false
 	end
-	
-	if cmd == "/unload" then
+
+	if cmd == '/unload' then
 		self:InitGraph()
 		return false
 	end
 
-end
-
-function TerrainMap:TeleportToCell(cell_x, cell_y)
-
-	self.teleporting = true
-	
-	Chat:Print("----", Color.Silver)
-	Chat:Print(string.format("Teleporting to Cell (%s, %s)", cell_x, cell_y), Color.Silver)
-	
-	self.previous_position = LocalPlayer:GetPosition()
-	Waypoint:SetPosition(Vector3((cell_x + 1) * self.cell_size - 0.5 * self.cell_size - 16384, 0, (cell_y + 1) * self.cell_size - 0.5 * self.cell_size - 16384))
-
-	Network:Send("TeleportToCell", {position = Waypoint:GetPosition()})
-	self.terrain_load_event = Events:Subscribe("PostTick", self, self.TerrainLoad)
-
-end
-
-function TerrainMap:TerrainLoad()
-
-	if self.teleporting then
-		if LocalPlayer:GetPosition() ~= self.previous_position then
-			self.previous_position = nil
-			self.teleporting = nil
-			self.terrain_loading = true
-			Chat:Print("Teleport completed.", Color.Silver)
-			Chat:Print("Loading terrain...", Color.Silver)
-		end
-	end
-	
-	if self.terrain_loading then
-		if LocalPlayer:GetLinearVelocity() ~= Vector3.Zero then
-			Chat:Print("Terrain loaded.", Color.Silver)
-			Events:Unsubscribe(self.terrain_load_event)
-			self.terrain_load_event = nil
-			self.terrain_loading = nil
-		end
+	if cmd == '/start' then
+		self.start = self:GetNearestNode(LocalPlayer:GetPosition())
+		return false
 	end
 
+	if cmd == '/stop' then
+		self.stop = self:GetNearestNode(LocalPlayer:GetPosition())
+		return false
+	end
+
+	if cmd == '/path' then
+		assert(self.start, 'Start node not selected')
+		assert(self.stop, 'Stop node not selected')
+		self.path, self.visited = self:GetPath(self.start, self.stop)
+		return false
+	end
+
+end
+
+function TerrainMap:GetMemoryUsage()
+	collectgarbage()
+	collectgarbage()
+	return collectgarbage("count")
+end
+
+function TerrainMap:GetCenterOfCell(cell_x, cell_y)
+	local size = config.cell_size
+	local x = cell_x * size + 0.5 * size - 16384
+	local z = cell_y * size + 0.5 * size - 16384
+	local pos = Vector3(x, 0, z)
+	pos.y = max(Physics:GetTerrainHeight(pos), 200)
+	return pos
+end
+
+function TerrainMap:GetCellXY(x, z)
+	local size = config.cell_size
+	return floor((x + 16384) / size), floor((z + 16384) / size)
 end
 
 function TerrainMap:GetCell(x, z)
-
-	return math.floor((x + 16384) / self.cell_size), math.floor((z + 16384) / self.cell_size)
-
+	local graph = self.graph
+	local cell_x, cell_y = self:GetCellXY(x, z)
+	return graph[cell_x] and graph[cell_x][cell_y]
 end
 
-function TerrainMap:MapTerrain(h)
+function TerrainMap:TeleportToCell(cell_x, cell_y)
+	Chat:Print(format('Teleporting to cell (%i, %i)...', cell_x, cell_y), Color.Silver)
+	return self:TeleportToPosition(self:GetCenterOfCell(cell_x, cell_y))
+end
 
-	local timer = Timer()
-	
-	local colors = {}
-	local function GetColor(y, alpha)
-		if not colors[y] then
-			local color
-			if y <= 200 then
-				color = Color.FromHSV(math.lerp(240, 190, y / 200), 1, 1)
-			else
-				color = Color.FromHSV(math.lerp(120, 0, (y - 200) / 1900), 1, 1)
+function TerrainMap:TeleportToPosition(pos)
+
+	self.previous = LocalPlayer:GetPosition()
+	Network:Send('TeleportToPosition', {position = pos})
+
+	local zero, sub = Vector3.Zero, nil
+	sub = Events:Subscribe('PreTick', function()
+		if self.previous then
+			if LocalPlayer:GetPosition() ~= self.previous then
+				self.loading, self.previous = Timer(), nil
+				Chat:Print('Teleport completed, loading terrain ...', Color.Silver)
 			end
-			if alpha then color.a = alpha end
-			colors[y] = color
+		elseif self.loading then
+			if LocalPlayer:GetLinearVelocity() ~= zero or self.loading:GetSeconds() > 5 then
+				Chat:Print('Terrain loaded.', Color.Silver)
+				Events:Unsubscribe(sub)
+				self.loading = nil
+				Events:Fire('TerrainLoad')
+			end
 		end
-		return colors[y]	
-	end
-	
-	local vertices = {}
-	local function AddVertex(x, z)
-		local y = Physics:GetTerrainHeight(Vector2(x, z))
-		table.insert(vertices, Vertex(Vector3(x, y, z), GetColor(y, 192)))
-	end
-	
-	local n = 1
-	local h = h or 256	
-	for x = -16384, 16384, h do
-		for z = -16384 * n, 16384 * n, h * n do
-			AddVertex(x, z)
-			AddVertex(x + h, z)
-		end
-		n = -n
-	end
-	
-	self.model = Model.Create(vertices)
-	self.model:SetTopology(Topology.TriangleStrip)
-	
-	print(string.format("Terrain time: %i ms", timer:GetMilliseconds()))
+	end)
 
 end
 
-function TerrainMap:BuildMap(cell_x, cell_y)
+function TerrainMap:MapCell(cell_x, cell_y)
+	if self.graph[cell_x] and self.graph[cell_x][cell_y] then return end
+	local size = config.cell_size
+	local x_start = size * cell_x - 16384
+	local x_stop = x_start + size - 1
+	local z_start = size * cell_y - 16384
+	local z_stop = z_start + size - 1
+	return self:BuildMap(x_start, x_stop, z_start, z_stop)
+end
 
-	local timer = Timer()
-	
-	local x_start = self.cell_size * cell_x - 16384
-	local x_stop = x_start + self.cell_size - 1
-	local z_start = self.cell_size * cell_y - 16384 
-	local z_stop = z_start + self.cell_size - 1
+function TerrainMap:BuildMap(x_start, x_stop, z_start, z_stop)
 
-	for x = x_start, x_stop, self.xz_step do
-		for z = z_start, z_stop, self.xz_step do
-			
-			local ceiling_ray = Physics:Raycast(Vector3(x, self.ceiling, z), Vector3.Down, 0, self.ceiling)
-			local max_y = math.round(ceiling_ray.position.y, self.y_precision)
-			
-			if (max_y <= self.sea_level and self.map_sea) or max_y > self.sea_level then
-			
-				if max_y <= self.sea_level and self.solid_sea then
+	local step = config.xz_step
+	local y_min_step, y_max_step = config.y_min_step, config.y_max_step
+	local ceiling = config.ceiling
+	local sea_level = config.sea_level
+	local map_sea, solid_sea = config.map_sea, config.solid_sea
+	local down = Vector3.Down
+	local round = round
 
-					self:AddNode(x, self.sea_level, z)
-					
-				elseif max_y > self.sea_level or not self.solid_sea then
-				
+	for x = x_start, x_stop, step do
+		for z = z_start, z_stop, step do
+			local ceiling_ray = Physics:Raycast(Vector3(x, ceiling, z), down, 0, ceiling)
+			local max_y = round(ceiling_ray.position.y, 2)
+			if (max_y <= sea_level and map_sea) or max_y > sea_level then
+				if max_y <= sea_level and solid_sea then
+					self:AddNode(x, sea_level, z)
+				elseif max_y > sea_level or not solid_sea then
 					self:AddNode(x, max_y, z)
-				
 					local terrain_height = Physics:GetTerrainHeight(Vector2(x, z))
-					local terrain_ray = Physics:Raycast(Vector3(x, terrain_height, z), Vector3.Down, 0, terrain_height)
-					local min_y = math.round(terrain_ray.position.y, self.y_precision)
-
-					if max_y - min_y > self.y_min_step then
-					
-						local n = max_y - self.y_min_step
-
+					local terrain_ray = Physics:Raycast(Vector3(x, terrain_height, z), down, 0, terrain_height)
+					local min_y = round(terrain_ray.position.y, 2)
+					if max_y - min_y > y_min_step then
+						local n = max_y - y_min_step
 						repeat
-
-							local ray = Physics:Raycast(Vector3(x, n, z), Vector3.Down, 0, self.y_max_step)
-							if ray.distance > 0 and ray.distance < self.y_max_step then
-								local y = math.round(ray.position.y, self.y_precision)
-								if (y <= self.sea_level and self.map_sea) or y > self.sea_level then
-									if y <= self.sea_level and self.solid_sea then
-										self:AddNode(x, self.sea_level, z)
+							local ray = Physics:Raycast(Vector3(x, n, z), down, 0, y_max_step)
+							if ray.distance > 0 and ray.distance < y_max_step then
+								local y = round(ray.position.y, 2)
+								if (y <= sea_level and map_sea) or y > sea_level then
+									if y <= sea_level and solid_sea then
+										self:AddNode(x, sea_level, z)
 										break
-									elseif y > self.sea_level or not self.solid_sea then
+									elseif y > sea_level or not solid_sea then
 										self:AddNode(x, y, z)
 									end
 								end
-								n = y - self.y_min_step
+								n = y - y_min_step
 							else
-								n = n - self.y_min_step
+								n = n - y_min_step
 							end
-							
 						until n <= min_y
-						
 					end
-					
 				end
-				
 			end
-	
 		end
-	end
-
-	print(string.format("Map time: %i ms", timer:GetMilliseconds()))
-
-end
-
-function TerrainMap:VectorToNode(vector)
-
-	local cell_x, cell_y = self:GetCell(vector.x, vector.z)
-	
-	if self.graph[cell_x] and self.graph[cell_x][cell_y] and self.graph[cell_x][cell_y][vector.x] and self.graph[cell_x][cell_y][vector.x][vector.z] then
-		return self.graph[cell_x][cell_y][vector.x][vector.z][math.round(vector.y, self.y_precision)]
-	else
-		return nil
 	end
 
 end
 
 function TerrainMap:AddNode(x, y, z)
 
-	local cell_x, cell_y = self:GetCell(x, z)
-	
-	self.graph[cell_x] = self.graph[cell_x] or {}
-	self.graph[cell_x][cell_y] = self.graph[cell_x][cell_y] or {}
-	self.graph[cell_x][cell_y][x] = self.graph[cell_x][cell_y][x] or {}
-	self.graph[cell_x][cell_y][x][z] = self.graph[cell_x][cell_y][x][z] or {}
-	self.graph[cell_x][cell_y][x][z][y] = {Vector3(x, y, z)}
+	local cell_x, cell_y = self:GetCellXY(x, z)
+	local graph = self.graph
+
+	graph[cell_x] = graph[cell_x] or {}
+	graph[cell_x][cell_y] = graph[cell_x][cell_y] or {}
+	graph[cell_x][cell_y][x] = graph[cell_x][cell_y][x] or {}
+	graph[cell_x][cell_y][x][z] = graph[cell_x][cell_y][x][z] or {}
+	graph[cell_x][cell_y][x][z][y] = {Vector3(x, y, z)}
 
 end
 
-function TerrainMap:LineOfSight(start_node, end_node)
+function TerrainMap:BuildPointModel()
 
-	if math.abs(self:GetSlope(start_node, end_node)) > self.max_slope then return false end
-
-	local distance = Vector3.Distance(start_node[1], end_node[1])
-	
-	if Physics:Raycast(start_node[1] + Vector3.Up * self.path_height, end_node[1] - start_node[1], 0, distance).distance < distance then return false end
-	
-	if Physics:Raycast(end_node[1] + Vector3.Up * self.path_height, start_node[1] - end_node[1], 0, distance).distance < distance then return false end
-	
-	return true
-	
-end
-
-function TerrainMap:GetSlope(start_node, end_node)
-	
-	return (end_node[1].y - start_node[1].y) / Vector3.Distance2D(start_node[1], end_node[1])
-
-end
-
-function TerrainMap:Process(cell_x, cell_y)
-	
-	local timer = Timer()
-	local step = self.xz_step
-
-	for x, v in pairs(self.graph[cell_x][cell_y]) do
-		for z, v in pairs(v) do
-			for y, start_node in pairs(v) do
-
-				local f_cell_x, f_cell_y = self:GetCell(x, z-step)
-				local b_cell_x, b_cell_y = self:GetCell(x, z+step)
-				local l_cell_x, l_cell_y = self:GetCell(x-step, z)
-				local r_cell_x, r_cell_y = self:GetCell(x+step, z)
-				
-				local f_cell, b_cell, l_cell, r_cell
-				
-				if self.graph[f_cell_x] then
-					f_cell = self.graph[f_cell_x][f_cell_y]
-				end
-				
-				if self.graph[b_cell_x] then
-					b_cell = self.graph[b_cell_x][b_cell_y]
-				end
-				
-				if self.graph[l_cell_x] then
-					l_cell = self.graph[l_cell_x][l_cell_y]
-				end
-				
-				if self.graph[r_cell_x] then
-					r_cell = self.graph[r_cell_x][r_cell_y]
-				end
-				
-				if r_cell and r_cell[x+step] and r_cell[x+step][z] and not start_node[5] then
-					for n, end_node in pairs(r_cell[x+step][z]) do
-						if y == self.sea_level and y == n then
-							start_node[5] = end_node
-							end_node[4] = start_node
-						elseif self:LineOfSight(start_node, end_node) then
-							start_node[5] = end_node
-							end_node[4] = start_node
-						end
-					end
-				end
-
-				if l_cell and l_cell[x-step] and l_cell[x-step][z] and not start_node[4] then
-					for n, end_node in pairs(l_cell[x-step][z]) do
-						if y == self.sea_level and y == n then
-							start_node[4] = end_node
-							end_node[5] = start_node
-						elseif self:LineOfSight(start_node, end_node) then
-							start_node[4] = end_node
-							end_node[5] = start_node
-						end
-					end
-				end
-
-				if b_cell and b_cell[x][z+step] and not start_node[3] then
-					for n, end_node in pairs(b_cell[x][z+step]) do
-						if y == self.sea_level and y == n then
-							start_node[3] = end_node
-							end_node[2] = start_node
-						elseif self:LineOfSight(start_node, end_node) then
-							start_node[3] = end_node
-							end_node[2] = start_node
-						end
-					end
-				end
-				
-				if f_cell and f_cell[x][z-step] and not start_node[2] then
-					for n, end_node in pairs(f_cell[x][z-step]) do
-						if y == self.sea_level and y == n then
-							start_node[2] = end_node
-							end_node[3] = start_node
-						elseif self:LineOfSight(start_node, end_node) then
-							start_node[2] = end_node
-							end_node[3] = start_node
-						end
-					end
-				end
-					
-			end
-							
-		end
-	end
-	
-	print(string.format("Map time: %i ms", timer:GetMilliseconds()))
-
-end
-
-function TerrainMap:GetNearestNode(position)
-
-	local nearest_distance = math.huge
-	local nearest_node = nil
-	
-	local cell_x, cell_y = self:GetCell(position.x, position.z)
-	
-	if self.graph[cell_x] and self.graph[cell_x][cell_y] then
-	
-		local x = math.round(position.x)
-		local z = math.round(position.z)
-
-		while next(self.graph[cell_x][cell_y]) and not self.graph[cell_x][cell_y][x] do
-			x = x - 1
-		end
-		
-		while next(self.graph[cell_x][cell_y][x]) and not self.graph[cell_x][cell_y][x][z] do
-			z = z - 1
-		end
-
-		for y, node in pairs(self.graph[cell_x][cell_y][x][z]) do
-				
-			local distance = Vector3.DistanceSqr(position, node[1])
-			if distance < nearest_distance then
-				nearest_distance = distance
-				nearest_node = node
-			end
-
-		end
-		
-	end
-		
-	return nearest_node
-	
-end
-
-function TerrainMap:GetNearestNodeBruteForce(position)
-
-	local nearest_distance = math.huge
-	local nearest_node = nil
-	
-	local cell_x, cell_y = self:GetCell(position.x, position.z)
-	
-	if self.graph[cell_x] and self.graph[cell_x][cell_y] then
-		for x, v in pairs(self.graph[cell_x][cell_y]) do
-			for z, v in pairs(v) do
-				for y, node in pairs(v) do
-			
-					local distance = Vector3.DistanceSqr(position, node[1])
-					if distance < nearest_distance then
-						nearest_distance = distance
-						nearest_node = node
-					end
-					
-				end
-			end
-		end
-	end
-		
-	return nearest_node
-
-end
-
-function TerrainMap:RemoveDisconnected()
-
-	local timer = Timer()
-
-	local start = self:GetNearestNode(LocalPlayer:GetPosition())
-	local connected = {[start] = true}
-	local s = {start}
-	
-	while #s > 0 do
-		for _, neighbor in ipairs(self:GetNeighbors(table.remove(s))) do			
-			if not connected[neighbor] then
-				table.insert(s, neighbor)
-				connected[neighbor] = true
-			end
-		end	
-	end
-	
+	local vertices = {}
 	for cell_x, v in pairs(self.graph) do
 		for cell_y, v in pairs(v) do
 			for x, v in pairs(v) do
 				for z, v in pairs(v) do
 					for y, node in pairs(v) do
-		
-						if not connected[node] then
-					
-							if self.check_ceiling then
-					
-								local distance = self.ceiling - node[1].y
-							
-								local ray = Physics:Raycast(node[1] + Vector3.Up * self.path_height, Vector3.Up, 0, distance)
-							
-								if ray.distance < distance then
-									self:DeleteNode(node)
-								end
-							
-							else
-
-								self:DeleteNode(node)
-
-							end
-			
-						end
-
+						insert(vertices, Vertex(node[1]))
 					end
 				end
 			end
 		end
 	end
-	
-	print(string.format("DFS time: %i ms", timer:GetMilliseconds()))
-				
+
+	if #vertices > 0 then
+		self.model = Model.Create(vertices)
+		self.model:SetColor(config.graph_color)
+		self.model:SetTopology(Topology.PointList)
+	end
+
 end
 
-function TerrainMap:DeleteNode(node)
+function TerrainMap:ProcessCell(cell_x, cell_y)
 
-	local cell_x, cell_y = self:GetCell(node[1].x, node[2].z)
-	
-	if node[2] then node[2][3] = nil end
-	if node[3] then node[3][2] = nil end
-	if node[4] then node[4][5] = nil end
-	if node[5] then node[5][4] = nil end
-	
-	local x = node[1].x
-	local z = node[1].z
-	local y = math.round(node[1].y, self.y_precision)
-	
-	self.graph[cell_x][cell_y][x][z][y] = nil
-	
-	if not next(self.graph[cell_x][cell_y][x][z]) then
-		self.graph[cell_x][cell_y][x][z] = nil
-		if not next(self.graph[cell_x][cell_y][x]) then
-			self.graph[cell_x][cell_y][x] = nil
-			if not next(self.graph[cell_x][cell_y]) then
-				self.graph[cell_x][cell_y] = nil
-				if not next(self.graph[cell_x]) then
-					self.graph[cell_x] = nil
+	local graph = self.graph
+	if not graph[cell_x] or not graph[cell_x][cell_y] then return end
+
+	local step = config.xz_step
+	local sea_level = config.sea_level
+	local directions = self.directions
+
+	for x, v in pairs(graph[cell_x][cell_y]) do
+		for z, v in pairs(v) do
+			for y, start_node in pairs(v) do
+				for i, direction in ipairs(self.directions) do
+
+					local n_x = x + step * direction[2]
+					local n_z = z + step * direction[3]
+
+					local n_cell = self:GetCell(n_x, n_z)
+					local n_xz = n_cell and n_cell[n_x] and n_cell[n_x][n_z]
+
+					if n_xz and not start_node[direction[4]] then
+						for n_y, end_node in pairs(n_cell[n_x][n_z]) do
+							if y == sea_level and y == n_y or self:LineOfSight(start_node[1], end_node[1]) then
+								start_node[direction[4]] = end_node
+								end_node[direction[5]] = start_node
+							end
+						end
+					end
+
 				end
 			end
 		end
@@ -598,193 +330,206 @@ function TerrainMap:DeleteNode(node)
 
 end
 
-function TerrainMap:FindPath(start, goal)
+function TerrainMap:BuildLineModel()
 
-	local timer = Timer()
-	
-	local frontier = {}
-	local visited = {}
-	local came_from = {}
-	local cost_so_far = {}
-	local priority = {}
-	
-	cost_so_far[start] = 0
-	priority[start] = self:GetHeuristicCost(start, goal)
-	frontier[start] = true
-	
-	while next(frontier) do
-	
-		-- Priority queue implementation
-		local lowest = math.huge
-		local current = nil
-		for node in pairs(frontier) do
-			if priority[node] < lowest then
-				lowest = priority[node]
-				current = node
-			end
-		end
-		
-		frontier[current] = nil
-		visited[current] = true
-		
-		if current == goal then
-		
-			local path = {current}
-			
-			while came_from[current] do
-				current = came_from[current]
-				table.insert(path, current)
-			end
-			
-			print(string.format("A* time: %i ms", timer:GetMilliseconds()))
-			
-			return path, visited
-			
-		end
-
-		for _, neighbor in ipairs(self:GetNeighbors(current)) do
-
-			if not visited[neighbor] then
-
-				local new_cost = cost_so_far[current] + self:GetConnectedCost(current, neighbor)
-				if not frontier[neighbor] or new_cost < cost_so_far[neighbor] then
-					came_from[neighbor] = current
-					cost_so_far[neighbor] = new_cost
-					frontier[neighbor] = true
-					priority[neighbor] = cost_so_far[neighbor] + self:GetHeuristicCost(neighbor, goal)
+	local vertices = {}
+	for cell_x, v in pairs(self.graph) do
+		for cell_y, v in pairs(v) do
+			for x, v in pairs(v) do
+				for z, v in pairs(v) do
+					for y, node in pairs(v) do
+						local center = Vertex(node[1])
+						for _, neighbor in ipairs(self:GetNeighbors(node)) do
+							insert(vertices, center)
+							insert(vertices, Vertex(neighbor[1]))
+						end
+					end
 				end
-				
 			end
-			
 		end
-		
 	end
 
-end
-
-function TerrainMap:GetHeuristicCost(start_node, end_node)
-
-	return Vector3.Distance(start_node[1], end_node[1])
-		
-end
-
-function TerrainMap:GetConnectedCost(start_node, end_node)
-
-	local weight = 1
-	
-	if end_node[1].y == self.sea_level then
-		weight = 2 * weight
+	if #vertices > 0 then
+		self.model = Model.Create(vertices)
+		self.model:SetColor(config.graph_color)
+		self.model:SetTopology(Topology.LineList)
 	end
-	
-	return weight * Vector3.Distance(start_node[1], end_node[1])
 
 end
 
 function TerrainMap:GetNeighbors(node)
 
 	local neighbors = {}
-	
-	if node[2] then -- forward
-		table.insert(neighbors, node[2])
-	end
-	
-	if node[3] then -- backward
-		table.insert(neighbors, node[3])
-	end
-	
-	if node[4] then -- left
-		table.insert(neighbors, node[4])
-	end
-	
-	if node[5] then -- right
-		table.insert(neighbors, node[5])
-	end
-	
-	if self.interpolate_eight then
-	
-		if node[2] and node[4] and node[2][4] and node[4][2] then
-			table.insert(neighbors, node[2][4])
-		end
-		
-		if node[2] and node[5] and node[2][5] and node[5][2] then
-			table.insert(neighbors, node[2][5])
-		end
-		
-		if node[3] and node[4] and node[3][4] and node[4][3] then
-			table.insert(neighbors, node[3][4])
-		end
-		
-		if node[3] and node[5] and node[3][5] and node[5][3] then
-			table.insert(neighbors, node[3][5])
-		end
-		
+
+	for i = 2, #self.directions + 1 do
+		if node[i] then insert(neighbors, node[i]) end
 	end
 
 	return neighbors
 
 end
 
-function TerrainMap:Render()
+function TerrainMap:LineOfSight(start_pos, end_pos)
 
-	if Game:GetState() ~= 4 or not self.render then return end
+	if abs(self:GetSlope(start_pos, end_pos)) > config.max_slope then return false end
 
-	if self.model then self.model:Draw() end
-		
-	if self.show_points or self.show_lines then
-		self:DrawGraph(self.graph, Color.Lime)
-	end
-	
-	if self.path then
-		for i, node in ipairs(self.path) do
-			if self.path[i+1] then
-				Render:DrawLine(node[1] + Vector3.Up * self.path_height, self.path[i+1][1] + Vector3.Up * self.path_height, Color.Magenta)
-			end
-		end
-		
-		if self.show_visited then
-			for node in pairs(self.visited) do
-				Render:DrawCircle(node[1] + Vector3(0, 0.5 * self.path_height, 0), self.radius, Color.Cyan)
-			end
-		end
-	end
-	
-	if self.start_node then
-		Render:DrawCircle(self.start_node[1] + Vector3(0, self.path_height, 0), 2 * self.radius, Color.Magenta)
-	end
-	
-	if self.goal_node then
-		Render:DrawCircle(self.goal_node[1] + Vector3(0, self.path_height, 0), 2 * self.radius, Color.Magenta)
-	end	
-	
+	local distance = start_pos:Distance(end_pos)
+
+	if Physics:Raycast(start_pos + self.path_offset, end_pos - start_pos, 0, distance).distance < distance then return false end
+	if Physics:Raycast(end_pos + self.path_offset, start_pos - end_pos, 0, distance).distance < distance then return false end
+
+	return true
+
 end
 
-function TerrainMap:DrawGraph(graph, color)
+function TerrainMap:GetSlope(start_pos, end_pos)
+	local rise = end_pos.y - start_pos.y
+	local run = start_pos:Distance2D(end_pos)
+	return rise / run
+end
 
-	for cell_x, v in pairs(self.graph) do
-		for cell_y, v in pairs(v) do
-			for x, v in pairs(v) do
-				for z, v in pairs(v) do
-					for y, node in pairs(v) do
-			
-						if self.show_points then		
-							Render:DrawCircle(node[1], self.radius, color)
-						end
-						
-						if self.show_lines then
+function TerrainMap:GetNearestNode(position)
 
-							if node[3] then
-								Render:DrawLine(node[1], node[3][1], color)
-							end
-							
-							if node[5] then
-								Render:DrawLine(node[1], node[5][1], color)
-							end
+	local step = config.xz_step
+	local x = floor(position.x / step + 0.5) * step
+	local z = floor(position.z / step + 0.5) * step
+	local cell = self:GetNearestCell(position)
 
-						end
-						
-					end
+	if cell[x] and cell[x][z] then
+		local nearest_distance, nearest_node = huge
+		for y, node in pairs(cell[x][z]) do
+			local distance = abs(y - position.y)
+			if distance < nearest_distance then
+				nearest_distance = distance
+				nearest_node = node
+			end
+		end
+		if nearest_node then return nearest_node end
+	end
+
+	local nearest_distance, nearest_node = huge
+	for x, v in pairs(cell) do
+		for z, v in pairs(v) do
+			for y, node in pairs(v) do
+				local distance = position:DistanceSqr(node[1])
+				if distance < nearest_distance then
+					nearest_distance = distance
+					nearest_node = node
 				end
-			end			
+			end
+		end
+	end
+
+	assert(nearest_node, 'No node discovered')
+	return nearest_node
+
+end
+
+function TerrainMap:GetNearestCell(position)
+
+	local nearest_cell = self:GetCell(position.x, position.z)
+
+	if not nearest_cell then
+		local graph = self.graph
+		local nearest_distance, nearest_x, nearest_y = huge
+		for cell_x, v in pairs(graph) do
+			for cell_y in pairs(v) do
+				local center = self:GetCenterOfCell(cell_x, cell_y)
+				local distance = position:DistanceSqr(center)
+				if distance < nearest_distance then
+					nearest_distance = distance
+					nearest_x, nearest_y = cell_x, cell_y
+				end
+			end
+		end
+		nearest_cell = graph[nearest_x] and graph[nearest_x][nearest_y]
+	end
+
+	assert(nearest_cell, 'No cell discovered')
+	return nearest_cell
+
+end
+
+function TerrainMap:GetPath(start, goal)
+
+	local timer = Timer()
+
+	local frontier, visited = {}, {}
+	local came_from, cost_so_far = {}, {}
+
+	cost_so_far[start] = 0
+	frontier[start] = self:GetHeuristicCost(start, goal)
+
+	while next(frontier) do
+
+		local lowest = huge
+		local current = nil
+		for node, priority in pairs(frontier) do
+			if priority < lowest then
+				lowest = priority
+				current = node
+			end
+		end
+
+		frontier[current] = nil
+		visited[current] = true
+
+		if current == goal then
+			local path = {current}
+			while came_from[current] do
+				current = came_from[current]
+				insert(path, current)
+			end
+			print(format("A* time: %i ms", timer:GetMilliseconds()))
+			return path, visited
+		end
+
+		for _, neighbor in ipairs(self:GetNeighbors(current)) do
+			if not visited[neighbor] then
+				local new_cost = cost_so_far[current] + self:GetConnectedCost(current, neighbor)
+				if not frontier[neighbor] or new_cost < cost_so_far[neighbor] then
+					came_from[neighbor] = current
+					cost_so_far[neighbor] = new_cost
+					frontier[neighbor] = new_cost + self:GetHeuristicCost(neighbor, goal)
+				end
+			end
+		end
+
+	end
+
+end
+
+function TerrainMap:GetHeuristicCost(start_node, end_node)
+	return distances.diagonal(start_node, end_node)
+end
+
+function TerrainMap:GetConnectedCost(start_node, end_node)
+	local weight = end_node[1].y == self.sea_level and 2 or 1
+	return weight * start_node[1]:Distance(end_node[1])
+end
+
+function TerrainMap:OnRender()
+
+	if Game:GetState() ~= 4 then return end
+
+	if self.model then self.model:Draw() end
+
+	local offset = self.path_offset
+
+	if self.start then Render:DrawCircle(self.start[1] + offset, 0.5, config.path_color) end
+	if self.stop then Render:DrawCircle(self.stop[1] + offset, 0.5, config.path_color) end
+
+	if self.path then
+		for i = 1, #self.path - 1 do
+			local a = self.path[i][1] + offset
+			local b = self.path[i + 1][1] + offset
+			Render:DrawLine(a, b, config.path_color)
+		end
+	end
+
+	if self.visited then
+		for node in pairs(self.visited) do
+			Render:DrawCircle(node[1], 0.2, config.visited_color)
 		end
 	end
 
