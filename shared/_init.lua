@@ -1,4 +1,4 @@
-local floor, format = math.floor, math.format
+local floor, format = math.floor, string.format
 
 function math.round(n, i)
 	local m = 10^(i or 0)
