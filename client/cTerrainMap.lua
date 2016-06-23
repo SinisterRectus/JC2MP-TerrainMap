@@ -58,10 +58,14 @@ function TerrainMap:__init()
 	Events:Subscribe('PlayerChat', self, self.OnPlayerChat)
 	Events:Subscribe('Render', self, self.OnRender)
 
+	Network:Subscribe('NextCell', self, self.OnNextCell)
+	Network:Subscribe('LoadedCell', self, self.OnLoadedCell)
+
 end
 
 function TerrainMap:InitGraph()
 	self.graph = {}
+	self.auto = nil
 	self.model = nil
 	self.start = nil
 	self.stop = nil
@@ -111,6 +115,31 @@ function TerrainMap:OnPlayerChat(args)
 		timer:Restart()
 		self:BuildLineModel()
 		printf('Line model time: %i ms', timer:GetMilliseconds())
+		return false
+	end
+
+	if cmd == '/savecell' then
+		local pos = LocalPlayer:GetPosition()
+		self:SaveCell(self:GetCellXY(pos.x, pos.z))
+		return false
+	end
+
+	if cmd == '/loadcell' then
+		local pos = LocalPlayer:GetPosition()
+		self:LoadCell(self:GetCellXY(pos.x, pos.z))
+		return false
+	end
+
+	if cmd == '/automap' then
+		if not self.auto then
+			Game:FireEvent('ply.makeinvulnerable')
+			self.auto = true
+			local pos = LocalPlayer:GetPosition()
+			self:AutoMap(self:GetCellXY(pos.x, pos.z))
+		else
+			Game:FireEvent('ply.makevulnerable')
+			self.auto = nil
+		end
 		return false
 	end
 
@@ -388,6 +417,146 @@ function TerrainMap:GetSlope(start_pos, end_pos)
 	return rise / run
 end
 
+function TerrainMap:SaveCell(cell_x, cell_y)
+
+	self.graph = {}
+
+	self:MapCell(cell_x, cell_y)
+
+	for _, direction in ipairs(self.directions) do
+		self:MapCell(cell_x + direction[2], cell_y + direction[3])
+	end
+
+	self:ProcessCell(cell_x, cell_y)
+
+	local size, step = config.cell_size, config.xz_step
+	local root_x, root_z = 16384 - cell_x * size, 16384 - cell_y * size
+	local sea_level = config.sea_level
+
+	local next_x, next_y
+	if cell_x < 32768 / size - 1 then
+		next_x = cell_x + 1
+		next_y = cell_y
+	else
+		if cell_y < 32768 / size - 1 then
+			next_x = 0
+			next_y = cell_y + 1
+		else
+			return
+		end
+	end
+
+	local nodes = {}
+	local count = 0
+	local graph = self.graph
+
+	if graph[cell_x] and graph[cell_x][cell_y] then
+		for x, v in pairs(graph[cell_x][cell_y]) do
+			for z, v in pairs(v) do
+				for y, node in pairs(v) do
+					local n = 0
+					for i, direction in ipairs(self.directions) do
+						if node[i + 1] then n = n + direction[1] end
+					end
+					if n > 0 then
+						count = count + 1
+						local x = (x + root_x) / step
+						local z = (z + root_z) / step
+						nodes[x] = nodes[x] or {}
+						nodes[x][z] = nodes[x][z] or {}
+						nodes[x][z][round(y)] = n -- round to save space
+					end
+				end
+			end
+		end
+	end
+
+	Network:Send('SaveCell', {
+		nodes = nodes, count = count,
+		cell_x = cell_x, cell_y = cell_y,
+		next_x = next_x, next_y = next_y,
+	})
+
+	self.graph = {}
+
+end
+
+function TerrainMap:LoadCell(cell_x, cell_y)
+	self.load_timer = Timer()
+	Network:Send('LoadCell', {
+		cell_x = cell_x, cell_y = cell_y
+	})
+end
+
+function TerrainMap:OnLoadedCell(args)
+
+	local graph = self.graph
+	local cell_x, cell_y = args.cell_x, args.cell_y
+	local size, step = config.cell_size, config.xz_step
+	local directions = self.directions
+
+	local root_x, root_z = 16384 - cell_x * size, 16384 - cell_y * size
+
+	for _, node in ipairs(args.nodes) do
+		local x = node[1] * step - root_x
+		local z = node[2] * step - root_z
+		local y = node[3]
+		graph[cell_x] = graph[cell_x] or {}
+		graph[cell_x][cell_y] = graph[cell_x][cell_y] or {}
+		graph[cell_x][cell_y][x] = graph[cell_x][cell_y][x] or {}
+		graph[cell_x][cell_y][x][z] = graph[cell_x][cell_y][x][z] or {}
+		graph[cell_x][cell_y][x][z][y] = {Vector3(x, y, z)}
+	end
+
+	for _, node in ipairs(args.nodes) do
+		local x = node[1] * step - root_x
+		local z = node[2] * step - root_z
+		local y = node[3]
+		for i, direction in ipairs(directions) do
+			if band(node[4], direction[1]) > 0 then
+				local next_x, next_z = x + direction[2] * step, z + direction[3] * step
+				local next_cell = self:GetCell(next_x, next_z)
+				local neighbor_xz = next_cell and next_cell[next_x] and next_cell[next_x][next_z]
+				if neighbor_xz then
+					-- need to find a valid y value in the neighboring node(s)
+					local nearest = {huge}
+					for other in pairs(neighbor_xz) do
+						local distance = abs(other - y)
+						if distance < nearest[1] then
+							nearest[1] = distance
+							nearest[2] = other
+						end
+					end
+					graph[cell_x][cell_y][x][z][y][i + 1] = neighbor_xz[nearest[2]]
+				end
+			end
+		end
+	end
+
+	printf('Cell load time: %i ms', self.load_timer:GetMilliseconds())
+
+	self:BuildLineModel()
+
+end
+
+function TerrainMap:AutoMap(cell_x, cell_y)
+
+	if not self.auto then return end
+
+	local sub
+	sub = Events:Subscribe('TerrainLoad', function()
+		Events:Unsubscribe(sub)
+		self:SaveCell(cell_x, cell_y)
+	end)
+
+	self:TeleportToCell(cell_x, cell_y)
+
+end
+
+function TerrainMap:OnNextCell(args)
+	self:AutoMap(args[1], args[2])
+end
+
 function TerrainMap:GetNearestNode(position)
 
 	local step = config.xz_step
@@ -480,7 +649,7 @@ function TerrainMap:GetPath(start, goal)
 				current = came_from[current]
 				insert(path, current)
 			end
-			print(format("A* time: %i ms", timer:GetMilliseconds()))
+			printf("A* time: %i ms", timer:GetMilliseconds())
 			return path, visited
 		end
 
