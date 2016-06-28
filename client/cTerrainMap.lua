@@ -40,17 +40,17 @@ function TerrainMap:__init()
 	self:InitGraph()
 
 	local directions = {
-		{0x01, 0,-1, 2, 3}, -- forward
-		{0x02, 0, 1, 3, 2}, -- backward
-		{0x04,-1, 0, 4, 5}, -- left
-		{0x08, 1, 0, 5, 4}, -- right
+		{0x01, 0,-1}, -- forward
+		{0x02, 0, 1}, -- backward
+		{0x04,-1, 0}, -- left
+		{0x08, 1, 0}, -- right
 	}
 
 	if config.eight then
-		insert(directions, {0x10,-1,-1, 6, 7}) -- forward left
-		insert(directions, {0x20, 1, 1, 7, 6}) -- backward right
-		insert(directions, {0x40, 1,-1, 8, 9}) -- forward right
-		insert(directions, {0x80,-1, 1, 9, 8}) -- backward left
+		insert(directions, {0x10,-1,-1}) -- forward left
+		insert(directions, {0x20, 1, 1}) -- backward right
+		insert(directions, {0x40, 1,-1}) -- forward right
+		insert(directions, {0x80,-1, 1}) -- backward left
 	end
 
 	self.directions = directions
@@ -65,8 +65,8 @@ end
 
 function TerrainMap:InitGraph()
 	self.graph = {}
+	self.models = {}
 	self.auto = nil
-	self.model = nil
 	self.start = nil
 	self.stop = nil
 	self.path = nil
@@ -99,10 +99,11 @@ function TerrainMap:OnPlayerChat(args)
 	if cmd == '/mapcell' then
 		local pos = LocalPlayer:GetPosition()
 		local timer = Timer()
-		self:MapCell(self:GetCellXY(pos.x, pos.z))
+		local cell_x, cell_y = self:GetCellXY(pos.x, pos.z)
+		self:MapCell(cell_x, cell_y)
 		printf('Map time: %i ms', timer:GetMilliseconds())
 		timer:Restart()
-		self:BuildPointModel()
+		self:BuildPointModel(cell_x, cell_y)
 		printf('Point model time: %i ms', timer:GetMilliseconds())
 		return false
 	end
@@ -110,10 +111,11 @@ function TerrainMap:OnPlayerChat(args)
 	if cmd == '/processcell' then
 		local pos = LocalPlayer:GetPosition()
 		local timer = Timer()
-		self:ProcessCell(self:GetCellXY(pos.x, pos.z))
+		local cell_x, cell_y = self:GetCellXY(pos.x, pos.z)
+		self:ProcessCell(cell_x, cell_y)
 		printf('Process time: %i ms', timer:GetMilliseconds())
 		timer:Restart()
-		self:BuildLineModel()
+		self:BuildLineModel(cell_x, cell_y)
 		printf('Line model time: %i ms', timer:GetMilliseconds())
 		return false
 	end
@@ -300,25 +302,31 @@ function TerrainMap:AddNode(x, y, z)
 
 end
 
-function TerrainMap:BuildPointModel()
+function TerrainMap:BuildPointModel(cell_x, cell_y)
 
+	local graph = self.graph
+	local cell = graph[cell_x] and graph[cell_x][cell_y]
+	if not cell then return end
 	local vertices = {}
-	for cell_x, v in pairs(self.graph) do
-		for cell_y, v in pairs(v) do
-			for x, v in pairs(v) do
-				for z, v in pairs(v) do
-					for y, node in pairs(v) do
-						insert(vertices, Vertex(node[1]))
-					end
-				end
+	for x, v in pairs(cell) do
+		for z, v in pairs(v) do
+			for y, node in pairs(v) do
+				insert(vertices, Vertex(node[1]))
 			end
 		end
 	end
 
 	if #vertices > 0 then
-		self.model = Model.Create(vertices)
-		self.model:SetColor(config.graph_color)
-		self.model:SetTopology(Topology.PointList)
+		local model = Model.Create(vertices)
+		if (cell_x + cell_y) % 2 == 0 then
+			model:SetColor(config.graph_color1)
+		else
+			model:SetColor(config.graph_color2)
+		end
+		model:SetTopology(Topology.PointList)
+		local models = self.models
+		models[cell_x] = models[cell_x] or {}
+		models[cell_x][cell_y] = model
 	end
 
 end
@@ -335,65 +343,89 @@ function TerrainMap:ProcessCell(cell_x, cell_y)
 	for x, v in pairs(graph[cell_x][cell_y]) do
 		for z, v in pairs(v) do
 			for y, start_node in pairs(v) do
+				local n = 0
 				for i, direction in ipairs(self.directions) do
-
 					local n_x = x + step * direction[2]
 					local n_z = z + step * direction[3]
-
 					local n_cell = self:GetCell(n_x, n_z)
 					local n_xz = n_cell and n_cell[n_x] and n_cell[n_x][n_z]
-
-					if n_xz and not start_node[direction[4]] then
-						for n_y, end_node in pairs(n_cell[n_x][n_z]) do
+					if n_xz then
+						for n_y, end_node in pairs(n_xz) do
 							if y == sea_level and y == n_y or self:LineOfSight(start_node[1], end_node[1]) then
-								start_node[direction[4]] = end_node
-								end_node[direction[5]] = start_node
+								n = n + direction[1]
+								break
 							end
 						end
 					end
-
 				end
+				insert(start_node, n)
 			end
 		end
 	end
 
 end
 
-function TerrainMap:BuildLineModel()
+function TerrainMap:BuildLineModel(cell_x, cell_y)
 
+	local graph = self.graph
+	local cell = graph[cell_x] and graph[cell_x][cell_y]
+	if not cell then return end
 	local vertices = {}
-	for cell_x, v in pairs(self.graph) do
-		for cell_y, v in pairs(v) do
-			for x, v in pairs(v) do
-				for z, v in pairs(v) do
-					for y, node in pairs(v) do
-						local center = Vertex(node[1])
-						for _, neighbor in ipairs(self:GetNeighbors(node)) do
-							insert(vertices, center)
-							insert(vertices, Vertex(neighbor[1]))
-						end
-					end
+	for x, v in pairs(cell) do
+		for z, v in pairs(v) do
+			for y, node in pairs(v) do
+				local center = Vertex(node[1])
+				for i, neighbor in ipairs(self:GetNeighbors(node)) do
+					insert(vertices, center)
+					insert(vertices, Vertex(neighbor[1]))
 				end
 			end
 		end
 	end
 
 	if #vertices > 0 then
-		self.model = Model.Create(vertices)
-		self.model:SetColor(config.graph_color)
-		self.model:SetTopology(Topology.LineList)
+		local model = Model.Create(vertices)
+		if (cell_x + cell_y) % 2 == 0 then
+			model:SetColor(config.graph_color1)
+		else
+			model:SetColor(config.graph_color2)
+		end
+		model:SetTopology(Topology.LineList)
+		local models = self.models
+		models[cell_x] = models[cell_x] or {}
+		models[cell_x][cell_y] = model
 	end
 
 end
 
 function TerrainMap:GetNeighbors(node)
 
+	local graph = self.graph
+	local step = config.xz_step
 	local neighbors = {}
-
-	for i = 2, #self.directions + 1 do
-		if node[i] then insert(neighbors, node[i]) end
+	local x = node[1].x
+	local y = node[1].y
+	local z = node[1].z
+	local n = node[2]
+	for i, direction in ipairs(self.directions) do
+		if band(n, direction[1]) > 0 then
+			local next_x, next_z = x + direction[2] * step, z + direction[3] * step
+			local next_cell = self:GetCell(next_x, next_z)
+			local neighbor_xz = next_cell and next_cell[next_x] and next_cell[next_x][next_z]
+			if neighbor_xz then
+				-- need to find a valid y value in the neighboring node(s)
+				local nearest = {huge}
+				for other, nearest_node in pairs(neighbor_xz) do
+					local distance = abs(other - y)
+					if distance < nearest[1] then
+						nearest[1] = distance
+						nearest[2] = nearest_node
+					end
+				end
+				insert(neighbors, nearest[2])
+			end
+		end
 	end
-
 	return neighbors
 
 end
@@ -454,11 +486,8 @@ function TerrainMap:SaveCell(cell_x, cell_y)
 		for x, v in pairs(graph[cell_x][cell_y]) do
 			for z, v in pairs(v) do
 				for y, node in pairs(v) do
-					local n = 0
-					for i, direction in ipairs(self.directions) do
-						if node[i + 1] then n = n + direction[1] end
-					end
-					if n > 0 then
+					local n = node[2]
+					if n > 0 then -- don't save connectionless nodes
 						count = count + 1
 						local x = (x + root_x) / step
 						local z = (z + root_z) / step
@@ -505,37 +534,12 @@ function TerrainMap:OnLoadedCell(args)
 		graph[cell_x][cell_y] = graph[cell_x][cell_y] or {}
 		graph[cell_x][cell_y][x] = graph[cell_x][cell_y][x] or {}
 		graph[cell_x][cell_y][x][z] = graph[cell_x][cell_y][x][z] or {}
-		graph[cell_x][cell_y][x][z][y] = {Vector3(x, y, z)}
-	end
-
-	for _, node in ipairs(args.nodes) do
-		local x = node[1] * step - root_x
-		local z = node[2] * step - root_z
-		local y = node[3]
-		for i, direction in ipairs(directions) do
-			if band(node[4], direction[1]) > 0 then
-				local next_x, next_z = x + direction[2] * step, z + direction[3] * step
-				local next_cell = self:GetCell(next_x, next_z)
-				local neighbor_xz = next_cell and next_cell[next_x] and next_cell[next_x][next_z]
-				if neighbor_xz then
-					-- need to find a valid y value in the neighboring node(s)
-					local nearest = {huge}
-					for other in pairs(neighbor_xz) do
-						local distance = abs(other - y)
-						if distance < nearest[1] then
-							nearest[1] = distance
-							nearest[2] = other
-						end
-					end
-					graph[cell_x][cell_y][x][z][y][i + 1] = neighbor_xz[nearest[2]]
-				end
-			end
-		end
+		graph[cell_x][cell_y][x][z][y] = {Vector3(x, y, z), node[4]}
 	end
 
 	printf('Cell load time: %i ms', self.load_timer:GetMilliseconds())
 
-	self:BuildLineModel()
+	self:BuildLineModel(cell_x, cell_y)
 
 end
 
@@ -666,6 +670,8 @@ function TerrainMap:GetPath(start, goal)
 
 	end
 
+	return nil, visited
+
 end
 
 function TerrainMap:GetHeuristicCost(start_node, end_node)
@@ -681,7 +687,11 @@ function TerrainMap:OnRender()
 
 	if Game:GetState() ~= 4 then return end
 
-	if self.model then self.model:Draw() end
+	for cell_x, v in pairs(self.models) do
+		for cell_y, model in pairs(v) do
+			model:Draw()
+		end
+	end
 
 	local offset = self.path_offset
 
