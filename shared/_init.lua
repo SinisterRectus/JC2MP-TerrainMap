@@ -21,7 +21,8 @@ config = {
 	solid_sea = true, -- whether to map at sea level or ocean floor
 	eight = true, -- whether to implement 8-direction movement
 	path_height = 0.5, -- good compromise for pathing
- 	graph_color = Color.Lime, -- color to use to render graph data
+ 	graph_color1 = Color.Lime, -- color to use to render graph data
+ 	graph_color2 = Color.Yellow, -- color to use to render graph data
 	path_color = Color.Magenta, -- color to use to render path data
 	visited_color = Color.Cyan, -- color to use to render visited nodes
 }
