@@ -2,7 +2,7 @@ local ipairs, assert, tonumber = ipairs, assert, tonumber
 local format, gmatch = string.format, string.gmatch
 local char, byte = string.char, string.byte
 local round, floor, log = math.round, math.floor, math.log
-local insert, concat, sort = table.insert, table.concat, table.sort
+local concat, sort = table.concat, table.sort
 local open, createdir = io.open, io.createdir
 local config = config
 
@@ -110,17 +110,17 @@ function TerrainMap:OnLoadCell(args, sender)
 	assert(readByte(file) == cell_x, 'Cell X mismatch')
 	assert(readByte(file) == cell_y, 'Cell Y mismatch')
 
-	local size = 2^readByte(file)
-	local step = 2^readByte(file)
-	local count = readShort(file)
+	assert(2^readByte(file) == size, 'Cell size mismatch')
+	assert(2^readByte(file) == step, 'Node size mismatch')
 
 	local nodes = {}
-	for i = 1, count do
-		local x = readByte(file)
-		local z = readByte(file)
-		local y = readShort(file)
-		local n = readByte(file)
-		insert(nodes, {x, z, y, n})
+	for i = 1, readShort(file) do
+		nodes[i] = {
+			readByte(file), -- x
+			readByte(file), -- z
+			readShort(file), -- y
+			readByte(file) -- n
+		}
 	end
 
 	file:close()

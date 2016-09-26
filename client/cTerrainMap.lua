@@ -11,26 +11,26 @@ local config = config
 local distances = {}
 
 function distances.manhattan(a, b)
-	local dx = abs(b[1].x - a[1].x)
-	local dy = abs(b[1].y - a[1].y)
-	local dz = abs(b[1].z - a[1].z)
+	local dx = abs(b.x - a.x)
+	local dy = abs(b.y - a.y)
+	local dz = abs(b.z - a.z)
 	return dx + dy + dz
 end
 
 local diff = sqrt(2) - 2
 function distances.diagonal(a, b)
-	local dx = abs(b[1].x - a[1].x)
-	local dy = abs(b[1].y - a[1].y)
-	local dz = abs(b[1].z - a[1].z)
+	local dx = abs(b.x - a.x)
+	local dy = abs(b.y - a.y)
+	local dz = abs(b.z - a.z)
 	return dx + dy + dz + diff * min(dx, dy, dz)
 end
 
-function distances.euclidian(a, b)
-	return a[1]:Distance(b[1])
+function distances.euclidean(a, b)
+	return a:Distance(b)
 end
 
-function distances.euclidianSqr(a, b)
-	return a[1]:DistanceSqr(b[1])
+function distances.euclideanSqr(a, b)
+	return a:DistanceSqr(b)
 end
 
 class 'TerrainMap'
@@ -64,13 +64,10 @@ function TerrainMap:__init()
 end
 
 function TerrainMap:InitGraph()
-	self.graph = {}
-	self.models = {}
+	self.graph, self.models = {}, {}
 	self.auto = nil
-	self.start = nil
-	self.stop = nil
-	self.path = nil
-	self.visited = nil
+	self.start, self.stop = nil, nil
+	self.path, self.visited = nil, nil
 	self.path_offset = Vector3.Up * config.path_height
 end
 
@@ -298,7 +295,7 @@ function TerrainMap:AddNode(x, y, z)
 	graph[cell_x][cell_y] = graph[cell_x][cell_y] or {}
 	graph[cell_x][cell_y][x] = graph[cell_x][cell_y][x] or {}
 	graph[cell_x][cell_y][x][z] = graph[cell_x][cell_y][x][z] or {}
-	graph[cell_x][cell_y][x][z][y] = {Vector3(x, y, z)}
+	graph[cell_x][cell_y][x][z][y] = Vector3(x, y, z)
 
 end
 
@@ -311,7 +308,7 @@ function TerrainMap:BuildPointModel(cell_x, cell_y)
 	for x, v in pairs(cell) do
 		for z, v in pairs(v) do
 			for y, node in pairs(v) do
-				insert(vertices, Vertex(node[1]))
+				insert(vertices, Vertex(node))
 			end
 		end
 	end
@@ -351,14 +348,14 @@ function TerrainMap:ProcessCell(cell_x, cell_y)
 					local n_xz = n_cell and n_cell[n_x] and n_cell[n_x][n_z]
 					if n_xz then
 						for n_y, end_node in pairs(n_xz) do
-							if y == sea_level and y == n_y or self:LineOfSight(start_node[1], end_node[1]) then
+							if y == sea_level and y == n_y or self:LineOfSight(start_node, end_node) then
 								n = n + direction[1]
 								break
 							end
 						end
 					end
 				end
-				insert(start_node, n)
+				start_node.n = n
 			end
 		end
 	end
@@ -374,10 +371,10 @@ function TerrainMap:BuildLineModel(cell_x, cell_y)
 	for x, v in pairs(cell) do
 		for z, v in pairs(v) do
 			for y, node in pairs(v) do
-				local center = Vertex(node[1])
+				local center = Vertex(node)
 				for i, neighbor in ipairs(self:GetNeighbors(node)) do
 					insert(vertices, center)
-					insert(vertices, Vertex(neighbor[1]))
+					insert(vertices, Vertex(neighbor))
 				end
 			end
 		end
@@ -400,53 +397,48 @@ end
 
 function TerrainMap:GetNeighbors(node)
 
-	local graph = self.graph
-	local step = config.xz_step
 	local neighbors = {}
-	local x = node[1].x
-	local y = node[1].y
-	local z = node[1].z
-	local n = node[2]
-	for i, direction in ipairs(self.directions) do
+	local step = config.xz_step
+	local x, y, z, n = node.x, node.y, node.z, node.n
+	for _, direction in ipairs(self.directions) do
 		if band(n, direction[1]) > 0 then
 			local next_x, next_z = x + direction[2] * step, z + direction[3] * step
 			local next_cell = self:GetCell(next_x, next_z)
 			local neighbor_xz = next_cell and next_cell[next_x] and next_cell[next_x][next_z]
 			if neighbor_xz then
 				-- need to find a valid y value in the neighboring node(s)
-				local nearest = {huge}
-				for other, nearest_node in pairs(neighbor_xz) do
-					local distance = abs(other - y)
-					if distance < nearest[1] then
-						nearest[1] = distance
-						nearest[2] = nearest_node
+				local nearest_distance, nearest_node = huge
+				for other_y, other_node in pairs(neighbor_xz) do
+					local distance = abs(other_y - y)
+					if distance < nearest_distance then
+						nearest_distance = distance
+						nearest_node = other_node
 					end
 				end
-				insert(neighbors, nearest[2])
+				insert(neighbors, nearest_node)
 			end
 		end
 	end
+
 	return neighbors
 
 end
 
-function TerrainMap:LineOfSight(start_pos, end_pos)
+function TerrainMap:LineOfSight(p1, p2)
 
-	if abs(self:GetSlope(start_pos, end_pos)) > config.max_slope then return false end
+	if abs(self:GetSlope(p1, p2)) > config.max_slope then return false end
 
-	local distance = start_pos:Distance(end_pos)
+	local d = p1:Distance(p2)
 
-	if Physics:Raycast(start_pos + self.path_offset, end_pos - start_pos, 0, distance).distance < distance then return false end
-	if Physics:Raycast(end_pos + self.path_offset, start_pos - end_pos, 0, distance).distance < distance then return false end
+	if Physics:Raycast(p1 + self.path_offset, p2 - p1, 0, d).distance < d then return false end
+	if Physics:Raycast(p2 + self.path_offset, p1 - p2, 0, d).distance < d then return false end
 
 	return true
 
 end
 
-function TerrainMap:GetSlope(start_pos, end_pos)
-	local rise = end_pos.y - start_pos.y
-	local run = start_pos:Distance2D(end_pos)
-	return rise / run
+function TerrainMap:GetSlope(p1, p2)
+	return (p2.y - p1.y) / p1:Distance2D(p2)
 end
 
 function TerrainMap:SaveCell(cell_x, cell_y)
@@ -486,15 +478,12 @@ function TerrainMap:SaveCell(cell_x, cell_y)
 		for x, v in pairs(graph[cell_x][cell_y]) do
 			for z, v in pairs(v) do
 				for y, node in pairs(v) do
-					local n = node[2]
-					if n > 0 then -- don't save connectionless nodes
-						count = count + 1
-						local x = (x + root_x) / step
-						local z = (z + root_z) / step
-						nodes[x] = nodes[x] or {}
-						nodes[x][z] = nodes[x][z] or {}
-						nodes[x][z][round(y)] = n -- round to save space
-					end
+					count = count + 1
+					local x = (x + root_x) / step
+					local z = (z + root_z) / step
+					nodes[x] = nodes[x] or {}
+					nodes[x][z] = nodes[x][z] or {}
+					nodes[x][z][round(y)] = node[2] -- round to save space
 				end
 			end
 		end
@@ -530,11 +519,12 @@ function TerrainMap:OnLoadedCell(args)
 		local x = node[1] * step - root_x
 		local z = node[2] * step - root_z
 		local y = node[3]
+		local v = Vector3(x, y, z); v.n = node[4]
 		graph[cell_x] = graph[cell_x] or {}
 		graph[cell_x][cell_y] = graph[cell_x][cell_y] or {}
 		graph[cell_x][cell_y][x] = graph[cell_x][cell_y][x] or {}
 		graph[cell_x][cell_y][x][z] = graph[cell_x][cell_y][x][z] or {}
-		graph[cell_x][cell_y][x][z][y] = {Vector3(x, y, z), node[4]}
+		graph[cell_x][cell_y][x][z][y] = v
 	end
 
 	printf('Cell load time: %i ms', self.load_timer:GetMilliseconds())
@@ -675,12 +665,12 @@ function TerrainMap:GetPath(start, goal)
 end
 
 function TerrainMap:GetHeuristicCost(start_node, end_node)
-	return distances.diagonal(start_node, end_node)
+	return distances.diagonal(start_node, end_node) -- change for different results
 end
 
 function TerrainMap:GetConnectedCost(start_node, end_node)
-	local weight = end_node[1].y == self.sea_level and 2 or 1
-	return weight * start_node[1]:Distance(end_node[1])
+	local weight = end_node.y == self.sea_level and 2 or 1
+	return weight * start_node:Distance(end_node)
 end
 
 function TerrainMap:OnRender()
@@ -695,20 +685,21 @@ function TerrainMap:OnRender()
 
 	local offset = self.path_offset
 
-	if self.start then Render:DrawCircle(self.start[1] + offset, 0.5, config.path_color) end
-	if self.stop then Render:DrawCircle(self.stop[1] + offset, 0.5, config.path_color) end
+	if self.start then Render:DrawCircle(self.start + offset, 0.5, config.path_color) end
+	if self.stop then Render:DrawCircle(self.stop + offset, 0.5, config.path_color) end
 
 	if self.path then
-		for i = 1, #self.path - 1 do
-			local a = self.path[i][1] + offset
-			local b = self.path[i + 1][1] + offset
+		local path = self.path
+		for i = 1, #path - 1 do
+			local a = path[i] + offset
+			local b = path[i + 1] + offset
 			Render:DrawLine(a, b, config.path_color)
 		end
 	end
 
 	if self.visited then
 		for node in pairs(self.visited) do
-			Render:DrawCircle(node[1], 0.2, config.visited_color)
+			Render:DrawCircle(node, 0.2, config.visited_color)
 		end
 	end
 
