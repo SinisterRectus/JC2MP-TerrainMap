@@ -481,14 +481,16 @@ function TerrainMap:SaveCell(cell_x, cell_y)
 		for x, v in pairs(graph[cell_x][cell_y]) do
 			for z, v in pairs(v) do
 				for y, node in pairs(v) do
-					count = count + 1
-					local x = (x + root_x) / step
-					local z = (z + root_z) / step
-					local y = round(y) -- round to save space
-					has_land = y ~= sea_level
-					nodes[x] = nodes[x] or {}
-					nodes[x][z] = nodes[x][z] or {}
-					nodes[x][z][y] = node.n
+					if node.n > 0 then -- ignore nodes with no connections
+						count = count + 1
+						local x = (x + root_x) / step
+						local z = (z + root_z) / step
+						local y = round(y) -- round to save space
+						has_land = y ~= sea_level
+						nodes[x] = nodes[x] or {}
+						nodes[x][z] = nodes[x][z] or {}
+						nodes[x][z][y] = node.n
+					end
 				end
 			end
 		end
