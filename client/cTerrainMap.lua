@@ -60,6 +60,7 @@ function TerrainMap:__init()
 
 	Network:Subscribe('NextCell', self, self.OnNextCell)
 	Network:Subscribe('LoadedCell', self, self.OnLoadedCell)
+	Network:Subscribe('SeaCell', self, self.OnSeaCell)
 
 end
 
@@ -243,7 +244,7 @@ function TerrainMap:BuildMap(x_start, x_stop, z_start, z_stop)
 	local y_min_step, y_max_step = config.y_min_step, config.y_max_step
 	local ceiling = config.ceiling
 	local sea_level = config.sea_level
-	local map_sea, solid_sea = config.map_sea, config.solid_sea
+	local map_sea_nodes, solid_sea = config.map_sea_nodes, config.solid_sea
 	local down = Vector3.Down
 	local round = round
 
@@ -251,7 +252,7 @@ function TerrainMap:BuildMap(x_start, x_stop, z_start, z_stop)
 		for z = z_start, z_stop, step do
 			local ceiling_ray = Physics:Raycast(Vector3(x, ceiling, z), down, 0, ceiling)
 			local max_y = round(ceiling_ray.position.y, 2)
-			if (max_y <= sea_level and map_sea) or max_y > sea_level then
+			if (max_y <= sea_level and map_sea_nodes) or max_y > sea_level then
 				if max_y <= sea_level and solid_sea then
 					self:AddNode(x, sea_level, z)
 				elseif max_y > sea_level or not solid_sea then
@@ -265,7 +266,7 @@ function TerrainMap:BuildMap(x_start, x_stop, z_start, z_stop)
 							local ray = Physics:Raycast(Vector3(x, n, z), down, 0, y_max_step)
 							if ray.distance > 0 and ray.distance < y_max_step then
 								local y = round(ray.position.y, 2)
-								if (y <= sea_level and map_sea) or y > sea_level then
+								if (y <= sea_level and map_sea_nodes) or y > sea_level then
 									if y <= sea_level and solid_sea then
 										self:AddNode(x, sea_level, z)
 										break
@@ -456,6 +457,7 @@ function TerrainMap:SaveCell(cell_x, cell_y)
 	local size, step = config.cell_size, config.xz_step
 	local root_x, root_z = 16384 - cell_x * size, 16384 - cell_y * size
 	local sea_level = config.sea_level
+	local save_sea_cells = config.save_sea_cells
 
 	local next_x, next_y
 	if cell_x < 32768 / size - 1 then
@@ -474,6 +476,7 @@ function TerrainMap:SaveCell(cell_x, cell_y)
 	local count = 0
 	local graph = self.graph
 
+	local has_land = false
 	if graph[cell_x] and graph[cell_x][cell_y] then
 		for x, v in pairs(graph[cell_x][cell_y]) do
 			for z, v in pairs(v) do
@@ -481,13 +484,17 @@ function TerrainMap:SaveCell(cell_x, cell_y)
 					count = count + 1
 					local x = (x + root_x) / step
 					local z = (z + root_z) / step
+					local y = round(y) -- round to save space
+					has_land = y ~= sea_level
 					nodes[x] = nodes[x] or {}
 					nodes[x][z] = nodes[x][z] or {}
-					nodes[x][z][round(y)] = node[2] -- round to save space
+					nodes[x][z][y] = node.n
 				end
 			end
 		end
 	end
+
+	if not save_sea_cells and not has_land then nodes = nil end
 
 	Network:Send('SaveCell', {
 		nodes = nodes, count = count,
@@ -511,7 +518,8 @@ function TerrainMap:OnLoadedCell(args)
 	local graph = self.graph
 	local cell_x, cell_y = args.cell_x, args.cell_y
 	local size, step = config.cell_size, config.xz_step
-	local directions = self.directions
+
+	graph[cell_x] = {[cell_y] = {}}
 
 	local root_x, root_z = 16384 - cell_x * size, 16384 - cell_y * size
 
@@ -520,11 +528,37 @@ function TerrainMap:OnLoadedCell(args)
 		local z = node[2] * step - root_z
 		local y = node[3]
 		local v = Vector3(x, y, z); v.n = node[4]
-		graph[cell_x] = graph[cell_x] or {}
-		graph[cell_x][cell_y] = graph[cell_x][cell_y] or {}
 		graph[cell_x][cell_y][x] = graph[cell_x][cell_y][x] or {}
 		graph[cell_x][cell_y][x][z] = graph[cell_x][cell_y][x][z] or {}
 		graph[cell_x][cell_y][x][z][y] = v
+	end
+
+	printf('Cell load time: %i ms', self.load_timer:GetMilliseconds())
+
+	self:BuildLineModel(cell_x, cell_y)
+
+end
+
+function TerrainMap:OnSeaCell(args)
+
+	local graph = self.graph
+	local cell_x, cell_y = args.cell_x, args.cell_y
+	local size, step = config.cell_size, config.xz_step
+	local sea_level = config.sea_level
+
+	graph[cell_x] = {[cell_y] = {}}
+
+	local x_start = size * cell_x - 16384
+	local x_stop = x_start + size - 1
+	local z_start = size * cell_y - 16384
+	local z_stop = z_start + size - 1
+
+	for x = x_start, x_stop, step do
+		graph[cell_x][cell_y][x] = {}
+		for z = z_start, z_stop, step do
+			local v = Vector3(x, sea_level, z); v.n = 255
+			graph[cell_x][cell_y][x][z] = {[sea_level] = v}
+		end
 	end
 
 	printf('Cell load time: %i ms', self.load_timer:GetMilliseconds())

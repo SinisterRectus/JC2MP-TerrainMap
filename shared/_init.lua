@@ -17,7 +17,8 @@ config = {
 	ceiling = 2100, -- constant, do not change
 	sea_level = 200, -- constant, do not change
 	max_slope = 1, -- 1 = 45 deg (via tangent function)
-	map_sea = false, -- whether to bother with sea nodes
+	map_sea_nodes = true, -- whether to map sea-level nodes
+	save_sea_cells = false, -- whether to save cells with no land
 	solid_sea = true, -- whether to map at sea level or ocean floor
 	eight = true, -- whether to implement 8-direction movement
 	path_height = 0.5, -- good compromise for pathing

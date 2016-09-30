@@ -59,7 +59,7 @@ function TerrainMap:OnSaveCell(args, sender)
 
 	local nodes = args.nodes
 
-	if next(nodes) then
+	if nodes and next(nodes) then
 
 		local count = args.count
 		local cell_x, cell_y = args.cell_x, args.cell_y
@@ -105,30 +105,40 @@ function TerrainMap:OnLoadCell(args, sender)
 	local cell_x, cell_y = args.cell_x, args.cell_y
 	local size, step = config.cell_size, config.xz_step
 
-	local file = assert(io.open(format('cells/%s_%s.cell', cell_x, cell_y), 'rb'), 'File not found')
+	local file = io.open(format('cells/%s_%s.cell', cell_x, cell_y), 'rb')
 
-	assert(readByte(file) == cell_x, 'Cell X mismatch')
-	assert(readByte(file) == cell_y, 'Cell Y mismatch')
+	if not file then
 
-	assert(2^readByte(file) == size, 'Cell size mismatch')
-	assert(2^readByte(file) == step, 'Node size mismatch')
+		Network:Send(sender, 'SeaCell', {
+			cell_x = cell_x, cell_y = cell_y,
+		})
 
-	local nodes = {}
-	for i = 1, readShort(file) do
-		nodes[i] = {
-			readByte(file), -- x
-			readByte(file), -- z
-			readShort(file), -- y
-			readByte(file) -- n
-		}
+	else
+
+		assert(readByte(file) == cell_x, 'Cell X mismatch')
+		assert(readByte(file) == cell_y, 'Cell Y mismatch')
+
+		assert(2^readByte(file) == size, 'Cell size mismatch')
+		assert(2^readByte(file) == step, 'Node size mismatch')
+
+		local nodes = {}
+		for i = 1, readShort(file) do
+			nodes[i] = {
+				readByte(file), -- x
+				readByte(file), -- z
+				readShort(file), -- y
+				readByte(file) -- n
+			}
+		end
+
+		file:close()
+
+		Network:Send(sender, 'LoadedCell', {
+			cell_x = cell_x, cell_y = cell_y,
+			nodes = nodes
+		})
+
 	end
-
-	file:close()
-
-	Network:Send(sender, 'LoadedCell', {
-		cell_x = cell_x, cell_y = cell_y,
-		nodes = nodes
-	})
 
 end
 
