@@ -486,7 +486,7 @@ function TerrainMap:SaveCell(cell_x, cell_y)
 						local x = (x + root_x) / step
 						local z = (z + root_z) / step
 						local y = round(y) -- round to save space
-						has_land = y ~= sea_level
+						if y ~= sea_level then has_land = true end
 						nodes[x] = nodes[x] or {}
 						nodes[x][z] = nodes[x][z] or {}
 						nodes[x][z][y] = node.n
