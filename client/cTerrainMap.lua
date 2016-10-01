@@ -1,6 +1,7 @@
 local math, string, table = math, string, table
 local pairs, ipairs, next = pairs, ipairs, next
 local max, min, abs, sqrt = math.max, math.min, math.abs, math.sqrt
+local create, yield, resume = coroutine.create, coroutine.yield, coroutine.resume
 local floor, round = math.floor, math.round
 local format, split = string.format, string.split
 local insert = table.insert
@@ -58,7 +59,7 @@ function TerrainMap:__init()
 	Events:Subscribe('PlayerChat', self, self.OnPlayerChat)
 	Events:Subscribe('Render', self, self.OnRender)
 
-	Network:Subscribe('NextCell', self, self.OnNextCell)
+	Network:Subscribe('NextCell', self, self.ReadyThread)
 	Network:Subscribe('LoadedCell', self, self.OnLoadedCell)
 	Network:Subscribe('SeaCell', self, self.OnSeaCell)
 
@@ -66,7 +67,7 @@ end
 
 function TerrainMap:InitGraph()
 	self.graph, self.models = {}, {}
-	self.auto = nil
+	self.thread, self.ready = nil, nil
 	self.start, self.stop = nil, nil
 	self.path, self.visited = nil, nil
 	self.path_offset = Vector3.Up * config.path_height
@@ -138,14 +139,13 @@ function TerrainMap:OnPlayerChat(args)
 	end
 
 	if cmd == '/automap' then
-		if not self.auto then
+		if not self.thread then
 			Game:FireEvent('ply.makeinvulnerable')
-			self.auto = true
 			local pos = LocalPlayer:GetPosition()
 			self:AutoMap(self:GetCellXY(pos.x, pos.z))
 		else
 			Game:FireEvent('ply.makevulnerable')
-			self.auto = nil
+			self.thread, self.ready = nil, nil
 		end
 		return false
 	end
@@ -211,11 +211,9 @@ function TerrainMap:TeleportToCell(cell_x, cell_y)
 	return self:TeleportToPosition(self:GetCenterOfCell(cell_x, cell_y))
 end
 
-function TerrainMap:TeleportToPosition(pos)
+function TerrainMap:TeleportToPosition(position)
 
 	self.previous = LocalPlayer:GetPosition()
-	Network:Send('TeleportToPosition', {position = pos})
-
 	local zero, sub = Vector3.Zero, nil
 	sub = Events:Subscribe('PreTick', function()
 		if self.previous then
@@ -228,10 +226,11 @@ function TerrainMap:TeleportToPosition(pos)
 				Chat:Print('Terrain loaded.', Color.Silver)
 				Events:Unsubscribe(sub)
 				self.loading = nil
-				Events:Fire('TerrainLoad')
+				self:ReadyThread()
 			end
 		end
 	end)
+	Network:Send('TeleportToPosition', {position = position})
 
 end
 
@@ -488,19 +487,6 @@ function TerrainMap:SaveCell(cell_x, cell_y)
 	local sea_level = config.sea_level
 	local save_sea_cells = config.save_sea_cells
 
-	local next_x, next_y
-	if cell_x < 32768 / size - 1 then
-		next_x = cell_x + 1
-		next_y = cell_y
-	else
-		if cell_y < 32768 / size - 1 then
-			next_x = 0
-			next_y = cell_y + 1
-		else
-			return
-		end
-	end
-
 	local nodes = {}
 	local count = 0
 	local graph = self.graph
@@ -530,7 +516,6 @@ function TerrainMap:SaveCell(cell_x, cell_y)
 	Network:Send('SaveCell', {
 		nodes = nodes, count = count,
 		cell_x = cell_x, cell_y = cell_y,
-		next_x = next_x, next_y = next_y,
 	})
 
 	self.graph = {}
@@ -596,21 +581,24 @@ function TerrainMap:OnSeaCell(args)
 end
 
 function TerrainMap:AutoMap(cell_x, cell_y)
-
-	if not self.auto then return end
-
-	local sub
-	sub = Events:Subscribe('TerrainLoad', function()
-		Events:Unsubscribe(sub)
-		self:SaveCell(cell_x, cell_y)
+	self.ready = false
+	self.thread = create(function()
+		local save_sea_cells = config.save_sea_cells
+		local n = 32768 / config.cell_size - 1
+		for cell_x = 0, n do
+			for cell_y = 0, n do
+				if save_sea_cells or self:CellHasLand(cell_x, cell_y) then
+					yield(self:TeleportToCell(cell_x, cell_y))
+					yield(self:SaveCell(cell_x, cell_y))
+				end
+			end
+		end
 	end)
-
-	self:TeleportToCell(cell_x, cell_y)
-
+	resume(self.thread)
 end
 
-function TerrainMap:OnNextCell(args)
-	self:AutoMap(args[1], args[2])
+function TerrainMap:ReadyThread()
+	if self.thread then self.ready = true end
 end
 
 function TerrainMap:GetNearestNode(position)
@@ -763,6 +751,11 @@ function TerrainMap:OnRender()
 		for node in pairs(self.visited) do
 			Render:DrawCircle(node, 0.2, config.visited_color)
 		end
+	end
+
+	if self.thread and self.ready then
+		self.ready = false
+		assert(resume(self.thread))
 	end
 
 end

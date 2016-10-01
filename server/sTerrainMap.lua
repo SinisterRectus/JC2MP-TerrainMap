@@ -93,10 +93,7 @@ function TerrainMap:OnSaveCell(args, sender)
 
 	self.cells = {}
 
-	local next_x, next_y = args.next_x, args.next_y
-	if next_x and next_y then
-		Network:Send(sender, 'NextCell', {next_x, next_y})
-	end
+	Network:Send(sender, 'NextCell')
 
 end
 
