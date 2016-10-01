@@ -93,7 +93,7 @@ function TerrainMap:OnSaveCell(args, sender)
 
 	self.cells = {}
 
-	Network:Send(sender, 'NextCell')
+	Network:Send(sender, 'CellSaved')
 
 end
 
@@ -103,14 +103,9 @@ function TerrainMap:OnLoadCell(args, sender)
 	local size, step = config.cell_size, config.xz_step
 
 	local file = io.open(format('cells/%s_%s.cell', cell_x, cell_y), 'rb')
+	local nodes
 
-	if not file then
-
-		Network:Send(sender, 'SeaCell', {
-			cell_x = cell_x, cell_y = cell_y,
-		})
-
-	else
+	if file then
 
 		assert(readByte(file) == cell_x, 'Cell X mismatch')
 		assert(readByte(file) == cell_y, 'Cell Y mismatch')
@@ -118,7 +113,7 @@ function TerrainMap:OnLoadCell(args, sender)
 		assert(2^readByte(file) == size, 'Cell size mismatch')
 		assert(2^readByte(file) == step, 'Node size mismatch')
 
-		local nodes = {}
+		nodes = {}
 		for i = 1, readShort(file) do
 			nodes[i] = {
 				readByte(file), -- x
@@ -130,12 +125,12 @@ function TerrainMap:OnLoadCell(args, sender)
 
 		file:close()
 
-		Network:Send(sender, 'LoadedCell', {
-			cell_x = cell_x, cell_y = cell_y,
-			nodes = nodes
-		})
-
 	end
+
+	Network:Send(sender, 'CellLoaded', {
+		cell_x = cell_x, cell_y = cell_y,
+		nodes = nodes
+	})
 
 end
 

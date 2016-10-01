@@ -56,12 +56,11 @@ function TerrainMap:__init()
 
 	self.directions = directions
 
-	Events:Subscribe('PlayerChat', self, self.OnPlayerChat)
 	Events:Subscribe('Render', self, self.OnRender)
+	Events:Subscribe('PlayerChat', self, self.OnPlayerChat)
 
-	Network:Subscribe('NextCell', self, self.ReadyThread)
-	Network:Subscribe('LoadedCell', self, self.OnLoadedCell)
-	Network:Subscribe('SeaCell', self, self.OnSeaCell)
+	Network:Subscribe('CellSaved', self, self.ReadyThread)
+	Network:Subscribe('CellLoaded', self, self.OnLoadedCell)
 
 end
 
@@ -533,49 +532,41 @@ function TerrainMap:OnLoadedCell(args)
 
 	local graph = self.graph
 	local cell_x, cell_y = args.cell_x, args.cell_y
-	local size, step = config.cell_size, config.xz_step
-
-	graph[cell_x] = {[cell_y] = {}}
-
-	local root_x, root_z = 16384 - cell_x * size, 16384 - cell_y * size
-
-	for _, node in ipairs(args.nodes) do
-		local x = node[1] * step - root_x
-		local z = node[2] * step - root_z
-		local y = node[3]
-		local v = Vector3(x, y, z); v.n = node[4]
-		graph[cell_x][cell_y][x] = graph[cell_x][cell_y][x] or {}
-		graph[cell_x][cell_y][x][z] = graph[cell_x][cell_y][x][z] or {}
-		graph[cell_x][cell_y][x][z][y] = v
-	end
-
-	printf('Cell load time: %i ms', self.load_timer:GetMilliseconds())
-
-	self:BuildLineModel(cell_x, cell_y)
-
-end
-
-function TerrainMap:OnSeaCell(args)
-
-	local graph = self.graph
-	local cell_x, cell_y = args.cell_x, args.cell_y
 	local step = config.xz_step
-	local sea_level = config.sea_level
 
 	graph[cell_x] = {[cell_y] = {}}
 
-	local x_start, x_stop, z_start, z_stop = self:GetCellCorners(cell_x, cell_y)
+	if args.nodes then
 
-	for x = x_start, x_stop, step do
-		graph[cell_x][cell_y][x] = {}
-		for z = z_start, z_stop, step do
-			local v = Vector3(x, sea_level, z); v.n = 255
-			graph[cell_x][cell_y][x][z] = {[sea_level] = v}
+		local size = config.cell_size
+		local root_x, root_z = 16384 - cell_x * size, 16384 - cell_y * size
+
+		for _, node in ipairs(args.nodes) do
+			local x = node[1] * step - root_x
+			local z = node[2] * step - root_z
+			local y = node[3]
+			local v = Vector3(x, y, z); v.n = node[4]
+			graph[cell_x][cell_y][x] = graph[cell_x][cell_y][x] or {}
+			graph[cell_x][cell_y][x][z] = graph[cell_x][cell_y][x][z] or {}
+			graph[cell_x][cell_y][x][z][y] = v
 		end
+
+	else
+
+		local sea_level = config.sea_level
+		local x_start, x_stop, z_start, z_stop = self:GetCellCorners(cell_x, cell_y)
+
+		for x = x_start, x_stop, step do
+			graph[cell_x][cell_y][x] = {}
+			for z = z_start, z_stop, step do
+				local v = Vector3(x, sea_level, z); v.n = 255
+				graph[cell_x][cell_y][x][z] = {[sea_level] = v}
+			end
+		end
+
 	end
 
 	printf('Cell load time: %i ms', self.load_timer:GetMilliseconds())
-
 	self:BuildLineModel(cell_x, cell_y)
 
 end
@@ -734,22 +725,24 @@ function TerrainMap:OnRender()
 	end
 
 	local offset = self.path_offset
+	local path_color = config.path_color
+	local visited_color = config.visited_color
 
-	if self.start then Render:DrawCircle(self.start + offset, 0.5, config.path_color) end
-	if self.stop then Render:DrawCircle(self.stop + offset, 0.5, config.path_color) end
+	if self.start then Render:DrawCircle(self.start + offset, 0.5, path_color) end
+	if self.stop then Render:DrawCircle(self.stop + offset, 0.5, path_color) end
 
 	if self.path then
 		local path = self.path
 		for i = 1, #path - 1 do
 			local a = path[i] + offset
 			local b = path[i + 1] + offset
-			Render:DrawLine(a, b, config.path_color)
+			Render:DrawLine(a, b, path_color)
 		end
 	end
 
 	if self.visited then
 		for node in pairs(self.visited) do
-			Render:DrawCircle(node, 0.2, config.visited_color)
+			Render:DrawCircle(node, 0.2, visited_color)
 		end
 	end
 
