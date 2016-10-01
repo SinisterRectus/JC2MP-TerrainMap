@@ -130,6 +130,13 @@ function TerrainMap:OnPlayerChat(args)
 		return false
 	end
 
+	if cmd == '/land' then
+		local pos = LocalPlayer:GetPosition()
+		local has_land = self:CellHasLand(self:GetCellXY(pos.x, pos.z))
+		Chat:Print(tostring(has_land), Color.Silver)
+		return false
+	end
+
 	if cmd == '/automap' then
 		if not self.auto then
 			Game:FireEvent('ply.makeinvulnerable')
@@ -228,14 +235,36 @@ function TerrainMap:TeleportToPosition(pos)
 
 end
 
-function TerrainMap:MapCell(cell_x, cell_y)
-	if self.graph[cell_x] and self.graph[cell_x][cell_y] then return end
+function TerrainMap:CellHasLand(cell_x, cell_y)
+	local size = config.cell_size
+	local sea_level = config.sea_level
+	local step = size
+	repeat
+		local x_start, x_stop, z_start, z_stop = self:GetCellCorners(cell_x, cell_y)
+		for x = x_start, x_stop, step do
+			for z = z_start, z_stop, step do
+				if Physics:GetTerrainHeight(Vector2(x, z)) > sea_level then
+					return true
+				end
+			end
+		end
+		step = step / 2
+	until step < config.xz_step
+	return false
+end
+
+function TerrainMap:GetCellCorners(cell_x, cell_y)
 	local size = config.cell_size
 	local x_start = size * cell_x - 16384
 	local x_stop = x_start + size - 1
 	local z_start = size * cell_y - 16384
 	local z_stop = z_start + size - 1
-	return self:BuildMap(x_start, x_stop, z_start, z_stop)
+	return x_start, x_stop, z_start, z_stop
+end
+
+function TerrainMap:MapCell(cell_x, cell_y)
+	if self.graph[cell_x] and self.graph[cell_x][cell_y] then return end
+	return self:BuildMap(self:GetCellCorners(cell_x, cell_y))
 end
 
 function TerrainMap:BuildMap(x_start, x_stop, z_start, z_stop)
@@ -545,15 +574,12 @@ function TerrainMap:OnSeaCell(args)
 
 	local graph = self.graph
 	local cell_x, cell_y = args.cell_x, args.cell_y
-	local size, step = config.cell_size, config.xz_step
+	local step = config.xz_step
 	local sea_level = config.sea_level
 
 	graph[cell_x] = {[cell_y] = {}}
 
-	local x_start = size * cell_x - 16384
-	local x_stop = x_start + size - 1
-	local z_start = size * cell_y - 16384
-	local z_stop = z_start + size - 1
+	local x_start, x_stop, z_start, z_stop = self:GetCellCorners(cell_x, cell_y)
 
 	for x = x_start, x_stop, step do
 		graph[cell_x][cell_y][x] = {}
