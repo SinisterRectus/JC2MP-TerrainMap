@@ -236,18 +236,15 @@ end
 function TerrainMap:CellHasLand(cell_x, cell_y)
 	local size = config.cell_size
 	local sea_level = config.sea_level
-	local step = size
-	repeat
-		local x_start, x_stop, z_start, z_stop = self:GetCellCorners(cell_x, cell_y)
-		for x = x_start, x_stop, step do
-			for z = z_start, z_stop, step do
-				if Physics:GetTerrainHeight(Vector2(x, z)) > sea_level then
-					return true
-				end
+	local step = config.xz_step
+	local x_start, x_stop, z_start, z_stop = self:GetCellCorners(cell_x, cell_y)
+	for x = x_start, x_stop, step do
+		for z = z_start, z_stop, step do
+			if Physics:GetTerrainHeight(Vector2(x, z)) > sea_level then
+				return true
 			end
 		end
-		step = step / 2
-	until step < config.xz_step
+	end
 	return false
 end
 
