@@ -39,6 +39,7 @@ class 'TerrainMap'
 function TerrainMap:__init()
 
 	self:InitGraph()
+	self:InitChat()
 
 	local directions = {
 		{0x01, 0,-1}, -- forward
@@ -72,111 +73,106 @@ function TerrainMap:InitGraph()
 	self.path_offset = Vector3.Up * config.path_height
 end
 
-function TerrainMap:OnPlayerChat(args)
+function TerrainMap:InitChat()
 
-	local text = split(args.text, ' ')
-	local cmd = text[1]
+	self.chat_table = {
 
-	if cmd == "/getpos" then
-		Chat:Print(tostring(LocalPlayer:GetPosition()), Color.Silver)
-		return false
-	end
+		['/getpos'] = function()
+			Chat:Print(tostring(LocalPlayer:GetPosition()), Color.Silver)
+		end,
 
-	if cmd == '/getcell' then
-		local pos = LocalPlayer:GetPosition()
-		Chat:Print(format('Cell = (%i, %i)', self:GetCellXY(pos.x, pos.z)), Color.Silver)
-		return false
-	end
-
-	if cmd == '/tpcell' then
-		local cell_x, cell_y = tonumber(text[2]), tonumber(text[3])
-		if cell_x and cell_y then self:TeleportToCell(cell_x, cell_y) end
-		return false
-	end
-
-	if cmd == '/mapcell' then
-		local pos = LocalPlayer:GetPosition()
-		local timer = Timer()
-		local cell_x, cell_y = self:GetCellXY(pos.x, pos.z)
-		self:MapCell(cell_x, cell_y)
-		printf('Map time: %i ms', timer:GetMilliseconds())
-		timer:Restart()
-		self:BuildPointModel(cell_x, cell_y)
-		printf('Point model time: %i ms', timer:GetMilliseconds())
-		return false
-	end
-
-	if cmd == '/processcell' then
-		local pos = LocalPlayer:GetPosition()
-		local timer = Timer()
-		local cell_x, cell_y = self:GetCellXY(pos.x, pos.z)
-		self:ProcessCell(cell_x, cell_y)
-		printf('Process time: %i ms', timer:GetMilliseconds())
-		timer:Restart()
-		self:BuildLineModel(cell_x, cell_y)
-		printf('Line model time: %i ms', timer:GetMilliseconds())
-		return false
-	end
-
-	if cmd == '/savecell' then
-		local pos = LocalPlayer:GetPosition()
-		self:SaveCell(self:GetCellXY(pos.x, pos.z))
-		return false
-	end
-
-	if cmd == '/loadcell' then
-		local pos = LocalPlayer:GetPosition()
-		self:LoadCell(self:GetCellXY(pos.x, pos.z))
-		return false
-	end
-
-	if cmd == '/land' then
-		local pos = LocalPlayer:GetPosition()
-		local has_land = self:CellHasLand(self:GetCellXY(pos.x, pos.z))
-		Chat:Print(tostring(has_land), Color.Silver)
-		return false
-	end
-
-	if cmd == '/automap' then
-		if not self.thread then
-			Game:FireEvent('ply.makeinvulnerable')
+		['/getcell'] = function()
 			local pos = LocalPlayer:GetPosition()
-			self:AutoMap(self:GetCellXY(pos.x, pos.z))
-		else
-			Game:FireEvent('ply.makevulnerable')
-			self.thread, self.ready = nil, nil
-		end
+			Chat:Print(format('Cell = (%i, %i)', self:GetCellXY(pos.x, pos.z)), Color.Silver)
+		end,
+
+		['/tpcell'] = function(text)
+			local cell_x, cell_y = tonumber(text[2]), tonumber(text[3])
+			if cell_x and cell_y then self:TeleportToCell(cell_x, cell_y) end
+		end,
+
+		['/mapcell'] = function()
+			local pos = LocalPlayer:GetPosition()
+			local timer = Timer()
+			local cell_x, cell_y = self:GetCellXY(pos.x, pos.z)
+			self:MapCell(cell_x, cell_y)
+			printf('Map time: %i ms', timer:GetMilliseconds())
+			timer:Restart()
+			self:BuildPointModel(cell_x, cell_y)
+			printf('Point model time: %i ms', timer:GetMilliseconds())
+		end,
+
+		['/processcell'] = function()
+			local pos = LocalPlayer:GetPosition()
+			local timer = Timer()
+			local cell_x, cell_y = self:GetCellXY(pos.x, pos.z)
+			self:ProcessCell(cell_x, cell_y)
+			printf('Process time: %i ms', timer:GetMilliseconds())
+			timer:Restart()
+			self:BuildLineModel(cell_x, cell_y)
+			printf('Line model time: %i ms', timer:GetMilliseconds())
+		end,
+
+		['/savecell'] = function()
+			local pos = LocalPlayer:GetPosition()
+			self:SaveCell(self:GetCellXY(pos.x, pos.z))
+		end,
+
+		['/loadcell'] = function()
+			local pos = LocalPlayer:GetPosition()
+			self:LoadCell(self:GetCellXY(pos.x, pos.z))
+		end,
+
+		['/land'] = function()
+			local pos = LocalPlayer:GetPosition()
+			local has_land = self:CellHasLand(self:GetCellXY(pos.x, pos.z))
+			Chat:Print(tostring(has_land), Color.Silver)
+		end,
+
+		['/automap'] = function()
+			if not self.thread then
+				Game:FireEvent('ply.makeinvulnerable')
+				local pos = LocalPlayer:GetPosition()
+				self:AutoMap(self:GetCellXY(pos.x, pos.z))
+			else
+				Game:FireEvent('ply.makevulnerable')
+				self.thread, self.ready = nil, nil
+			end
+		end,
+
+		["/mem"] = function()
+			local mem = self:GetMemoryUsage()
+			Chat:Print(format("%i kB used", mem), Color.Silver)
+		end,
+
+		['/unload'] = function()
+			self:InitGraph()
+		end,
+
+		['/start'] = function()
+			self.start = self:GetNearestNode(LocalPlayer:GetPosition())
+		end,
+
+		['/stop'] = function()
+			self.stop = self:GetNearestNode(LocalPlayer:GetPosition())
+		end,
+
+		['/path'] = function()
+			assert(self.start, 'Start node not selected')
+			assert(self.stop, 'Stop node not selected')
+			self.path, self.visited = self:GetPath(self.start, self.stop)
+		end,
+	}
+
+end
+
+function TerrainMap:OnPlayerChat(args)
+	local tbl = self.chat_table
+	local text = split(args.text, ' ')
+	if tbl[text[1]] then
+		tbl[text[1]](text)
 		return false
 	end
-
-	if cmd == "/mem" then
-		local mem = self:GetMemoryUsage()
-		Chat:Print(format("%i kB used", mem), Color.Silver)
-		return false
-	end
-
-	if cmd == '/unload' then
-		self:InitGraph()
-		return false
-	end
-
-	if cmd == '/start' then
-		self.start = self:GetNearestNode(LocalPlayer:GetPosition())
-		return false
-	end
-
-	if cmd == '/stop' then
-		self.stop = self:GetNearestNode(LocalPlayer:GetPosition())
-		return false
-	end
-
-	if cmd == '/path' then
-		assert(self.start, 'Start node not selected')
-		assert(self.stop, 'Stop node not selected')
-		self.path, self.visited = self:GetPath(self.start, self.stop)
-		return false
-	end
-
 end
 
 function TerrainMap:GetMemoryUsage()
@@ -373,24 +369,25 @@ function TerrainMap:ProcessCell(cell_x, cell_y)
 					local n_xz = n_cell and n_cell[n_x] and n_cell[n_x][n_z]
 					if n_xz then
 						for n_y, end_node in pairs(n_xz) do
-							local found = false
 							if y == sea_level and y == n_y then
 								n = n + direction[1]
-								found = true
+								break
 							elseif end_node.n then
+								local found = false
 								for _, neighbor in ipairs(self:GetNeighbors(end_node)) do
 									if neighbor == start_node then
 										n = n + direction[1]
 										found = true
+										break
 									end
 								end
+								if found then break end
 							else
 								if self:LineOfSight(start_node, end_node) then
 									n = n + direction[1]
-									found = true
+									break
 								end
 							end
-							if found then break end
 						end
 					end
 				end
@@ -473,12 +470,11 @@ function TerrainMap:LineOfSight(p1, p2)
 	if Physics:Raycast(p1 + offset, p2 - p1, 0, d).distance < d then return false end
 	if Physics:Raycast(p2 + offset, p1 - p2, 0, d).distance < d then return false end
 
-	local n = sin(atan(slope))
-	if n > 0 then
-		local midpoint = lerp(p1, p2, 0.5)
+	if slope > 0 then
 		local p3 = p1.y > p2.y and Vector3(p1.x, p2.y, p1.z) or Vector3(p2.x, p1.y, p2.z)
 		local q = Angle.FromVectors(Vector3.Forward, p3 - p1)
-		local endpoint = p1 + q * Vector3(0, 0, -0.5 * d * slope / n)
+		local midpoint = lerp(p1, p2, 0.5)
+		local endpoint = p1 + q * Vector3(0, 0, -0.5 * d * slope / sin(atan(slope)))
 		if Physics:Raycast(midpoint, endpoint - midpoint, 0, 1).distance > 0.5 then return false end
 	end
 

@@ -102,7 +102,7 @@ function TerrainMap:OnLoadCell(args, sender)
 	local cell_x, cell_y = args.cell_x, args.cell_y
 	local size, step = config.cell_size, config.xz_step
 
-	local file = io.open(format('cells/%s_%s.cell', cell_x, cell_y), 'rb')
+	local file = open(format('cells/%s_%s.cell', cell_x, cell_y), 'rb')
 	local nodes
 
 	if file then
