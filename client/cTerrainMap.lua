@@ -505,13 +505,11 @@ function TerrainMap:SaveCell(cell_x, cell_y)
 	local size, step = config.cell_size, config.xz_step
 	local root_x, root_z = 16384 - cell_x * size, 16384 - cell_y * size
 	local sea_level = config.sea_level
-	local save_sea_cells = config.save_sea_cells
 
 	local nodes = {}
 	local count = 0
 	local graph = self.graph
 
-	local has_land = false
 	if graph[cell_x] and graph[cell_x][cell_y] then
 		for x, v in pairs(graph[cell_x][cell_y]) do
 			for z, v in pairs(v) do
@@ -520,7 +518,6 @@ function TerrainMap:SaveCell(cell_x, cell_y)
 						local x = (x + root_x) / step
 						local z = (z + root_z) / step
 						local y = round(y) -- round to save space
-						if y ~= sea_level then has_land = true end
 						nodes[x] = nodes[x] or {}
 						nodes[x][z] = nodes[x][z] or {}
 						if not nodes[x][z][y] then
@@ -532,8 +529,6 @@ function TerrainMap:SaveCell(cell_x, cell_y)
 			end
 		end
 	end
-
-	if not save_sea_cells and not has_land then nodes = nil end
 
 	Network:Send('SaveCell', {
 		nodes = nodes, count = count,
@@ -597,11 +592,11 @@ end
 function TerrainMap:AutoMap(cell_x, cell_y)
 	self.ready = false
 	self.thread = create(function()
-		local save_sea_cells = config.save_sea_cells
+		local map_sea_cells = config.map_sea_cells
 		local n = 32768 / config.cell_size - 1
 		for cell_x = 0, n do
 			for cell_y = 0, n do
-				if save_sea_cells or self:CellHasLand(cell_x, cell_y) then
+				if map_sea_cells or self:CellHasLand(cell_x, cell_y) then
 					yield(self:TeleportToCell(cell_x, cell_y))
 					yield(self:SaveCell(cell_x, cell_y))
 				end
