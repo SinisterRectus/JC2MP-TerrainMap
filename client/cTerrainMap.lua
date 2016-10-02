@@ -1,8 +1,8 @@
 local math, string, table = math, string, table
 local pairs, ipairs, next = pairs, ipairs, next
-local max, min, abs, sqrt = math.max, math.min, math.abs, math.sqrt
+local max, min, abs, sqrt, lerp = math.max, math.min, math.abs, math.sqrt, math.lerp
+local sin, atan, floor, round = math.sin, math.atan, math.floor, math.round
 local create, yield, resume = coroutine.create, coroutine.yield, coroutine.resume
-local floor, round = math.floor, math.round
 local format, split = string.format, string.split
 local insert = table.insert
 local band = bit32.band
@@ -454,12 +454,22 @@ end
 
 function TerrainMap:LineOfSight(p1, p2)
 
-	if abs(self:GetSlope(p1, p2)) > config.max_slope then return false end
+	local slope = abs(self:GetSlope(p1, p2))
+	if slope > config.max_slope then return false end
 
 	local d = p1:Distance(p2)
+	local offset = self.path_offset
+	if Physics:Raycast(p1 + offset, p2 - p1, 0, d).distance < d then return false end
+	if Physics:Raycast(p2 + offset, p1 - p2, 0, d).distance < d then return false end
 
-	if Physics:Raycast(p1 + self.path_offset, p2 - p1, 0, d).distance < d then return false end
-	if Physics:Raycast(p2 + self.path_offset, p1 - p2, 0, d).distance < d then return false end
+	local n = sin(atan(slope))
+	if n > 0 then
+		local midpoint = lerp(p1, p2, 0.5)
+		local p3 = p1.y > p2.y and Vector3(p1.x, p2.y, p1.z) or Vector3(p2.x, p1.y, p2.z)
+		local q = Angle.FromVectors(Vector3.Forward, p3 - p1)
+		local endpoint = p1 + q * Vector3(0, 0, -0.5 * d * slope / n)
+		if Physics:Raycast(midpoint, endpoint - midpoint, 0, 1).distance > 0.5 then return false end
+	end
 
 	return true
 
