@@ -366,17 +366,31 @@ function TerrainMap:ProcessCell(cell_x, cell_y)
 		for z, v in pairs(v) do
 			for y, start_node in pairs(v) do
 				local n = 0
-				for i, direction in ipairs(self.directions) do
+				for _, direction in ipairs(directions) do
 					local n_x = x + step * direction[2]
 					local n_z = z + step * direction[3]
 					local n_cell = self:GetCell(n_x, n_z)
 					local n_xz = n_cell and n_cell[n_x] and n_cell[n_x][n_z]
 					if n_xz then
 						for n_y, end_node in pairs(n_xz) do
-							if y == sea_level and y == n_y or self:LineOfSight(start_node, end_node) then
+							local found = false
+							if y == sea_level and y == n_y then
 								n = n + direction[1]
-								break
+								found = true
+							elseif end_node.n then
+								for _, neighbor in ipairs(self:GetNeighbors(end_node)) do
+									if neighbor == start_node then
+										n = n + direction[1]
+										found = true
+									end
+								end
+							else
+								if self:LineOfSight(start_node, end_node) then
+									n = n + direction[1]
+									found = true
+								end
 							end
+							if found then break end
 						end
 					end
 				end
