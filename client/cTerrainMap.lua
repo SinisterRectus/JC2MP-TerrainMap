@@ -9,6 +9,17 @@ local band = bit32.band
 local huge = math.huge
 local config = config
 
+local Direction = {
+	Forward = 1,
+	Backward = 2,
+	Left = 3,
+	Right = 4,
+	ForwardLeft = 5,
+	BackWardRight = 6,
+	ForwardRight = 7,
+	BackwardLeft = 8,
+}
+
 local distances = {}
 
 function distances.manhattan(a, b)
@@ -42,17 +53,17 @@ function TerrainMap:__init()
 	self:InitChat()
 
 	local directions = {
-		{0x01, 0,-1}, -- forward
-		{0x02, 0, 1}, -- backward
-		{0x04,-1, 0}, -- left
-		{0x08, 1, 0}, -- right
+		{0x01, 0,-1, 2}, -- forward
+		{0x02, 0, 1, 1}, -- backward
+		{0x04,-1, 0, 4}, -- left
+		{0x08, 1, 0, 3}, -- right
 	}
 
 	if config.eight then
-		insert(directions, {0x10,-1,-1}) -- forward left
-		insert(directions, {0x20, 1, 1}) -- backward right
-		insert(directions, {0x40, 1,-1}) -- forward right
-		insert(directions, {0x80,-1, 1}) -- backward left
+		insert(directions, {0x10,-1,-1, 6}) -- forward left
+		insert(directions, {0x20, 1, 1, 5}) -- backward right
+		insert(directions, {0x40, 1,-1, 8}) -- forward right
+		insert(directions, {0x80,-1, 1, 7}) -- backward left
 	end
 
 	self.directions = directions
@@ -362,31 +373,18 @@ function TerrainMap:ProcessCell(cell_x, cell_y)
 		for z, v in pairs(v) do
 			for y, start_node in pairs(v) do
 				local n = 0
-				for _, direction in ipairs(directions) do
-					local n_x = x + step * direction[2]
-					local n_z = z + step * direction[3]
+				for direction, flag in ipairs(directions) do
+					local n_x = x + step * flag[2]
+					local n_z = z + step * flag[3]
 					local n_cell = self:GetCell(n_x, n_z)
 					local n_xz = n_cell and n_cell[n_x] and n_cell[n_x][n_z]
 					if n_xz then
 						for n_y, end_node in pairs(n_xz) do
-							if y == sea_level and y == n_y then
-								n = n + direction[1]
+							local n_n = end_node.n
+							local n_flag = directions[flag[4]]
+							if y == sea_level and y == n_y or n_n and band(n_n, n_flag[1]) > 0 and start_node == self:FindNeighbor(n_x, n_y, n_z, n_n, step, n_flag) or self:LineOfSight(start_node, end_node) then
+								n = n + flag[1]
 								break
-							elseif end_node.n then
-								local found = false
-								for _, neighbor in ipairs(self:GetNeighbors(end_node)) do
-									if neighbor == start_node then
-										n = n + direction[1]
-										found = true
-										break
-									end
-								end
-								if found then break end
-							else
-								if self:LineOfSight(start_node, end_node) then
-									n = n + direction[1]
-									break
-								end
 							end
 						end
 					end
@@ -431,33 +429,35 @@ function TerrainMap:BuildLineModel(cell_x, cell_y)
 
 end
 
-function TerrainMap:GetNeighbors(node)
-
-	local neighbors = {}
-	local step = config.xz_step
-	local x, y, z, n = node.x, node.y, node.z, node.n
-	for _, direction in ipairs(self.directions) do
-		if band(n, direction[1]) > 0 then
-			local next_x, next_z = x + direction[2] * step, z + direction[3] * step
-			local next_cell = self:GetCell(next_x, next_z)
-			local neighbor_xz = next_cell and next_cell[next_x] and next_cell[next_x][next_z]
-			if neighbor_xz then
-				-- need to find a valid y value in the neighboring node(s)
-				local nearest_distance, nearest_node = huge
-				for other_y, other_node in pairs(neighbor_xz) do
-					local distance = abs(other_y - y)
-					if distance < nearest_distance then
-						nearest_distance = distance
-						nearest_node = other_node
-					end
-				end
-				insert(neighbors, nearest_node)
+function TerrainMap:FindNeighbor(x, y, z, n, step, flag)
+	local next_x, next_z = x + flag[2] * step, z + flag[3] * step
+	local next_cell = self:GetCell(next_x, next_z)
+	local neighbor_xz = next_cell and next_cell[next_x] and next_cell[next_x][next_z]
+	if neighbor_xz then
+		-- need to find a valid y value in the neighboring node(s)
+		local nearest_distance, nearest_node = huge
+		for other_y, other_node in pairs(neighbor_xz) do
+			local distance = abs(other_y - y)
+			if distance < nearest_distance then
+				nearest_distance = distance
+				nearest_node = other_node
 			end
 		end
+		return nearest_node
 	end
+end
 
+function TerrainMap:GetNeighbors(node)
+	local step = config.xz_step
+	local x, y, z, n = node.x, node.y, node.z, node.n
+	local neighbors = {}
+	for direction, flag in ipairs(self.directions) do
+		if band(n, flag[1]) > 0 then
+			local neighbor = self:FindNeighbor(x, y, z, n, step, flag)
+			if neighbor then insert(neighbors, neighbor) end
+		end
+	end
 	return neighbors
-
 end
 
 function TerrainMap:LineOfSight(p1, p2)
@@ -492,8 +492,8 @@ function TerrainMap:SaveCell(cell_x, cell_y)
 
 	self:MapCell(cell_x, cell_y)
 
-	for _, direction in ipairs(self.directions) do
-		self:MapCell(cell_x + direction[2], cell_y + direction[3])
+	for direction, flag in ipairs(self.directions) do
+		self:MapCell(cell_x + flag[2], cell_y + flag[3])
 	end
 
 	self:ProcessCell(cell_x, cell_y)
