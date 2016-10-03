@@ -118,6 +118,17 @@ function TerrainMap:InitChat()
 			printf('Point model time: %i ms', timer:GetMilliseconds())
 		end,
 
+		['/mapedges'] = function()
+			local pos = LocalPlayer:GetPosition()
+			local timer = Timer()
+			local cell_x, cell_y = self:GetCellXY(pos.x, pos.z)
+			self:MapCellEdges(cell_x, cell_y)
+			printf('Map time: %i ms', timer:GetMilliseconds())
+			timer:Restart()
+			self:BuildPointModel(cell_x, cell_y)
+			printf('Point model time: %i ms', timer:GetMilliseconds())
+		end,
+
 		['/processcell'] = function()
 			local pos = LocalPlayer:GetPosition()
 			local timer = Timer()
@@ -163,6 +174,13 @@ function TerrainMap:InitChat()
 
 		['/unload'] = function()
 			self:InitGraph()
+		end,
+
+		['/unloadcell'] = function()
+			local pos = LocalPlayer:GetPosition()
+			local cell_x, cell_y = self:GetCellXY(pos.x, pos.z)
+			if self.graph[cell_x] then self.graph[cell_x][cell_y] = nil end
+			if self.models[cell_x] then self.models[cell_x][cell_y] = nil end
 		end,
 
 		['/start'] = function()
@@ -261,17 +279,25 @@ function TerrainMap:CellHasLand(cell_x, cell_y)
 end
 
 function TerrainMap:GetCellCorners(cell_x, cell_y)
+	local step = config.xz_step
 	local size = config.cell_size
 	local x_start = size * cell_x - 16384
-	local x_stop = x_start + size - 1
+	local x_stop = x_start + size - step
 	local z_start = size * cell_y - 16384
-	local z_stop = z_start + size - 1
+	local z_stop = z_start + size - step
 	return x_start, x_stop, z_start, z_stop
 end
 
 function TerrainMap:MapCell(cell_x, cell_y)
-	if self.graph[cell_x] and self.graph[cell_x][cell_y] then return end
-	return self:BuildMap(self:GetCellCorners(cell_x, cell_y))
+	self:BuildMap(self:GetCellCorners(cell_x, cell_y))
+end
+
+function TerrainMap:MapCellEdges(cell_x, cell_y)
+	local x_start, x_stop, z_start, z_stop = self:GetCellCorners(cell_x, cell_y)
+	self:BuildMap(x_start, x_start, z_start, z_stop)
+	self:BuildMap(x_stop, x_stop, z_start, z_stop)
+	self:BuildMap(x_start, x_stop, z_start, z_start)
+	self:BuildMap(x_start, x_stop, z_stop, z_stop)
 end
 
 function TerrainMap:BuildMap(x_start, x_stop, z_start, z_stop)
@@ -489,11 +515,9 @@ function TerrainMap:SaveCell(cell_x, cell_y)
 	self.graph = {}
 
 	self:MapCell(cell_x, cell_y)
-
 	for direction, flags in ipairs(self.directions) do
-		self:MapCell(cell_x + flags[2], cell_y + flags[3])
+		self:MapCellEdges(cell_x + flags[2], cell_y + flags[3])
 	end
-
 	self:ProcessCell(cell_x, cell_y)
 
 	local size, step = config.cell_size, config.xz_step
