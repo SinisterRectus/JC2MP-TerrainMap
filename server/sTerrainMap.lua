@@ -59,7 +59,7 @@ function TerrainMap:OnSaveCell(args, sender)
 
 	local nodes = args.nodes
 
-	if nodes and next(nodes) then
+	if next(nodes) then
 
 		local count = args.count
 		local cell_x, cell_y = args.cell_x, args.cell_y

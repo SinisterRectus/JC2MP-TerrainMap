@@ -72,6 +72,7 @@ function TerrainMap:__init()
 	end
 
 	self.directions = directions
+	self.sea_cells = {}
 
 	Events:Subscribe('Render', self, self.OnRender)
 	Events:Subscribe('PlayerChat', self, self.OnPlayerChat)
@@ -148,12 +149,6 @@ function TerrainMap:InitChat()
 		['/loadcell'] = function()
 			local pos = LocalPlayer:GetPosition()
 			self:LoadCell(self:GetCellXY(pos.x, pos.z))
-		end,
-
-		['/land'] = function()
-			local pos = LocalPlayer:GetPosition()
-			local has_land = self:CellHasLand(self:GetCellXY(pos.x, pos.z))
-			Chat:Print(tostring(has_land), Color.Silver)
 		end,
 
 		['/automap'] = function()
@@ -263,21 +258,6 @@ function TerrainMap:TeleportToPosition(position)
 
 end
 
-function TerrainMap:CellHasLand(cell_x, cell_y)
-	local size = config.cell_size
-	local sea_level = config.sea_level
-	local step = config.xz_step
-	local x_start, x_stop, z_start, z_stop = self:GetCellCorners(cell_x, cell_y)
-	for x = x_start, x_stop, step do
-		for z = z_start, z_stop, step do
-			if Physics:GetTerrainHeight(Vector2(x, z)) > sea_level then
-				return true
-			end
-		end
-	end
-	return false
-end
-
 function TerrainMap:GetCellCorners(cell_x, cell_y)
 	local step = config.xz_step
 	local size = config.cell_size
@@ -289,7 +269,7 @@ function TerrainMap:GetCellCorners(cell_x, cell_y)
 end
 
 function TerrainMap:MapCell(cell_x, cell_y)
-	self:BuildMap(self:GetCellCorners(cell_x, cell_y))
+	return self:BuildMap(self:GetCellCorners(cell_x, cell_y))
 end
 
 function TerrainMap:MapCellEdges(cell_x, cell_y)
@@ -310,6 +290,7 @@ function TerrainMap:BuildMap(x_start, x_stop, z_start, z_stop)
 	local down = Vector3.Down
 	local round = round
 
+	local has_land
 	for x = x_start, x_stop, step do
 		for z = z_start, z_stop, step do
 			local ceiling_ray = Physics:Raycast(Vector3(x, ceiling, z), down, 0, ceiling)
@@ -318,6 +299,7 @@ function TerrainMap:BuildMap(x_start, x_stop, z_start, z_stop)
 				if max_y <= sea_level and solid_sea then
 					self:AddNode(x, sea_level, z)
 				elseif max_y > sea_level or not solid_sea then
+					has_land = true
 					self:AddNode(x, max_y, z)
 					local terrain_height = Physics:GetTerrainHeight(Vector2(x, z))
 					local terrain_ray = Physics:Raycast(Vector3(x, terrain_height, z), down, 0, terrain_height)
@@ -346,6 +328,7 @@ function TerrainMap:BuildMap(x_start, x_stop, z_start, z_stop)
 			end
 		end
 	end
+	return has_land
 
 end
 
@@ -513,43 +496,43 @@ end
 function TerrainMap:SaveCell(cell_x, cell_y)
 
 	self.graph = {}
-
-	self:MapCell(cell_x, cell_y)
-	for direction, flags in ipairs(self.directions) do
-		self:MapCellEdges(cell_x + flags[2], cell_y + flags[3])
-	end
-	self:ProcessCell(cell_x, cell_y)
-
-	local size, step = config.cell_size, config.xz_step
-	local root_x, root_z = 16384 - cell_x * size, 16384 - cell_y * size
-	local sea_level = config.sea_level
-
 	local nodes = {}
 	local count = 0
-	local graph = self.graph
+	local has_land = self:MapCell(cell_x, cell_y)
 
-	local has_land = config.save_sea_cells
-	if graph[cell_x] and graph[cell_x][cell_y] then
-		for x, v in pairs(graph[cell_x][cell_y]) do
-			for z, v in pairs(v) do
-				for y, node in pairs(v) do
-					if node.n > 0 then -- ignore nodes with no connections
-						if y > sea_level then has_land = true end
-						local x = (x + root_x) / step
-						local z = (z + root_z) / step
-						local y = round(y) -- round to save space
-						nodes[x] = nodes[x] or {}
-						nodes[x][z] = nodes[x][z] or {}
-						if not nodes[x][z][y] then
-							nodes[x][z][y] = node.n
-							count = count + 1
+	if has_land or config.save_sea_cells then
+
+		for direction, flags in ipairs(self.directions) do
+			self:MapCellEdges(cell_x + flags[2], cell_y + flags[3])
+		end
+		self:ProcessCell(cell_x, cell_y)
+
+		local size, step = config.cell_size, config.xz_step
+		local root_x, root_z = 16384 - cell_x * size, 16384 - cell_y * size
+		local sea_level = config.sea_level
+		local graph = self.graph
+
+		if graph[cell_x] and graph[cell_x][cell_y] then
+			for x, v in pairs(graph[cell_x][cell_y]) do
+				for z, v in pairs(v) do
+					for y, node in pairs(v) do
+						if node.n > 0 then -- ignore nodes with no connections
+							local x = (x + root_x) / step
+							local z = (z + root_z) / step
+							local y = round(y) -- round to save space
+							nodes[x] = nodes[x] or {}
+							nodes[x][z] = nodes[x][z] or {}
+							if not nodes[x][z][y] then
+								nodes[x][z][y] = node.n
+								count = count + 1
+							end
 						end
 					end
 				end
 			end
 		end
+
 	end
-	if not has_land then nodes = nil end
 
 	Network:Send('SaveCell', {
 		nodes = nodes, count = count,
